@@ -66,7 +66,13 @@ function lookAt(s, t, st) {
   if (!a || !b) return null;
   return { az: (a.azimuth * DEG + 360) % 360, el: a.elevation * DEG, range: a.rangeSat, rr: b.rangeSat - a.rangeSat };
 }
-const elAt = (s, t, st) => { const l = lookAt(s, t, st); return l ? l.el : -90; };
+// Elevation only (one propagation): the pass search calls this a lot
+function elAt(s, t, st) {
+  const rec = satRec(s); if (!rec) return -90;
+  const d = new Date(t * 1000), pv = satellite.propagate(rec, d);
+  if (!pv || !pv.position || typeof pv.position === "boolean") return -90;
+  return satellite.ecfToLookAngles(st, satellite.eciToEcf(pv.position, satellite.gstime(d))).elevation * DEG;
+}
 
 // Next pass above the horizon from t0 (or the one in progress), within 24 h
 function nextPass(s, t0, st) {
