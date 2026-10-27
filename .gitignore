@@ -1,0 +1,11 @@
+__pycache__/
+test/*.png
+test/stream.bin
+test/expected.json
+spec_capture.bin
+spec_capture.txt
+render.log
+render.err
+test/fixtures/raw/
+docs/banner/banner.html
+docs/banner/wf.png

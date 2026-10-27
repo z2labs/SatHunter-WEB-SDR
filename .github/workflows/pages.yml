@@ -1,0 +1,50 @@
+name: Pages
+
+# Publishes index.html with fresh satellite data (data/sats.json) on GitHub Pages:
+# on every push to main and once a day.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Site
+        run: |
+          mkdir -p _site/data
+          cp index.html _site/index.html
+          cp docs/banner.png _site/banner.png
+          touch _site/.nojekyll
+      - name: Satellite data (SatNOGS, CelesTrak)
+        run: |
+          # keep the published copy when the sources are down
+          python tools/fetch_data.py _site/data/sats.json || \
+            curl -fsSL https://z2labs.github.io/SatHunter-WEB-SDR/data/sats.json -o _site/data/sats.json || \
+            echo "::warning::no satellite data"
+          ls -la _site/data
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
