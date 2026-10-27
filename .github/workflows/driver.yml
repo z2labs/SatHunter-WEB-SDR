@@ -46,12 +46,22 @@ jobs:
       - uses: microsoft/setup-msbuild@v2
 
       - name: Build wdi-simple (32-bit, runs on every Windows)
-        shell: cmd
+        shell: pwsh
         run: |
           cd libwdi
-          msbuild libwdi.sln /m /p:Configuration=Release,Platform=Win32,BuildMacros="WDK_DIR=\"../wdk/Windows Kits/8.0\";LIBUSB0_DIR=\"../libusb0\";LIBUSBK_DIR=\"../libusbk/bin\""
-          if not exist Win32\Release\examples\wdi-simple.exe (echo ::error title=libwdi::wdi-simple.exe was not built & exit /b 1)
-          dir Win32\Release\examples
+          $macros = 'WDK_DIR="../wdk/Windows Kits/8.0";LIBUSB0_DIR="../libusb0";LIBUSBK_DIR="../libusbk/bin"'
+          msbuild libwdi.sln /m "/p:Configuration=Release" "/p:Platform=Win32" "/p:BuildMacros=$macros" | Tee-Object -FilePath build.log | Out-Null
+          $exe = Get-ChildItem -Recurse -Filter wdi-simple.exe | Select-Object -First 1
+          if (-not $exe) {
+            $err = (Select-String -Path build.log -Pattern "error" | Select-Object -First 15 | ForEach-Object { $_.Line.Trim() }) -join " %0A "
+            $tree = (Get-ChildItem wdk -Recurse -Directory -Depth 3 | Select-Object -First 15 | ForEach-Object { $_.FullName }) -join " %0A "
+            Write-Output "::error title=libwdi build::$err"
+            Write-Output "::error title=wdk tree::$tree"
+            exit 1
+          }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item $exe.FullName out\wdi-simple.exe
+          Write-Output "built $($exe.FullName)"
 
       - name: Inno Setup
         shell: pwsh
@@ -62,7 +72,7 @@ jobs:
             $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup *\ISCC.exe", "C:\Program Files\Inno Setup *\ISCC.exe" | Select-Object -First 1
           }
           $ver = if ("${{ inputs.release_tag }}") { "${{ inputs.release_tag }}" -replace '^driver-', '' } else { "1.0" }
-          & $iscc.FullName "/DWdiSimple=$pwd\libwdi\Win32\Release\examples\wdi-simple.exe" "/DAppVer=$ver" driver\rtlsdr-driver.iss
+          & $iscc.FullName "/DWdiSimple=$pwd\libwdi\out\wdi-simple.exe" "/DAppVer=$ver" driver\rtlsdr-driver.iss
           if ($LASTEXITCODE) { Write-Output "::error title=Inno Setup::ISCC failed"; exit 1 }
           Get-FileHash driver\Output\SatHunter-RTL-SDR-Driver.exe
 
