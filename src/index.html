@@ -270,6 +270,8 @@ input[type=number].short { width: 64px; flex: 0 0 64px; }
 .satline { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1.5px dashed var(--ok); pointer-events: none; z-index: 2; }
 .satline.down { opacity: 0.45; }
 .only-sats-narrow { display: none; }
+body.kind-esp .rtl-only, body.kind-rtl .esp-only { display: none !important; }
+.note a { color: var(--accent); }
 @media (max-width: 1180px) {
   .app, .app.rack-away { grid-template-columns: 1fr 312px; grid-template-areas: "head head" "view rack"; }
   .app.rack-away { grid-template-columns: 1fr 0px; }
@@ -311,10 +313,10 @@ input[type=number].short { width: 64px; flex: 0 0 64px; }
 @media (prefers-reduced-motion: reduce) { .rack, .app { transition: none; } }
 </style>
 </head>
-<body>
+<body class="kind-esp">
 <div class="app" id="app">
   <header class="top">
-    <div class="brand"><b>SatHunter Web</b><span>ESP32-S3</span></div>
+    <div class="brand"><b>SatHunter Web</b><span id="brandSub">ESP32-S3</span></div>
     <div class="readout" title="Scroll or tap the upper/lower half of a digit to tune">
       <div class="digits" id="digits" role="group" aria-label="Centre frequency"></div>
       <span class="unit">MHz</span>
@@ -324,7 +326,8 @@ input[type=number].short { width: 64px; flex: 0 0 64px; }
       <button class="btn only-sats-narrow" id="satsBtn" type="button" aria-expanded="false" aria-controls="sats">Satellites</button>
       <span class="chip demo" id="chip"><i></i><span id="chipText">Demo</span></span>
       <button class="btn iconbtn" id="playBtn" type="button" aria-label="Stop" title="Stop / start the spectrum"><svg viewBox="0 0 16 16" id="playIcon"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg></button>
-      <button class="btn primary" id="connectBtn" type="button"><span id="connectLabel">Connect</span><span class="wide-only"> board</span></button>
+      <button class="btn primary" id="connectBtn" type="button"><span id="connectLabel">Connect</span><span class="wide-only"> ESP32-S3</span></button>
+      <button class="btn" id="rtlTopBtn" type="button" title="Connect an RTL-SDR (WebUSB)">RTL-SDR</button>
       <button class="btn only-narrow" id="rackBtn" type="button" aria-expanded="false" aria-controls="rack">Controls</button>
     </div>
   </header>
@@ -356,7 +359,7 @@ input[type=number].short { width: 64px; flex: 0 0 64px; }
       <h2>Satellites <button class="pin" id="satRefresh" type="button" title="Download the satellite data again">⟳</button></h2>
       <p class="note" id="satHead"></p>
       <input id="satSearch" type="search" placeholder="Search: name, NORAD, mode" aria-label="Search satellites" style="height:30px;border-radius:6px;border:1px solid var(--line);background:var(--bg);padding:0 8px">
-      <div class="row"><div class="seg" id="satBandSeg"><button type="button" data-v="esp">ESP32-S3 band</button><button type="button" data-v="all">All bands</button></div></div>
+      <div class="row"><div class="seg" id="satBandSeg"><button type="button" data-v="esp">This receiver</button><button type="button" data-v="all">All bands</button></div></div>
       <div class="row"><div class="seg" id="satSortSeg"><button type="button" data-v="pass">Next pass</button><button type="button" data-v="health">Best heard</button></div></div>
       <div class="slist" id="satList"></div>
     </section>
@@ -391,12 +394,14 @@ input[type=number].short { width: 64px; flex: 0 0 64px; }
       <p class="note" id="srcNote">Plug the ESP32-S3 into its native USB port (the one marked USB, not UART), then press <b>Connect board</b>.</p>
       <div class="fw" id="fwInfo">No board connected</div>
       <div class="fw" id="tuneInfo"></div>
-      <div class="row">
+      <div class="row" style="flex-wrap:wrap">
+        <button class="btn small" id="rtlBtn" type="button" title="RTL-SDR Blog V3 / V4 or another RTL2832U stick, over WebUSB">Connect RTL-SDR</button>
         <button class="btn small" id="demoBtn" type="button">Run demo</button>
         <button class="btn small" id="allPortsBtn" type="button" title="Pick any serial port, also USB-UART bridges">Other port…</button>
       </div>
+      <p class="note" id="rtlNote">RTL-SDR on Windows: install the driver once with <a href="https://github.com/z2labs/SatHunter-WEB-SDR/releases/download/driver-1.0/SatHunter-RTL-SDR-Driver.exe">this one-click installer</a> (instead of Zadig). Android, ChromeOS and macOS need nothing.</p>
       <label class="check"><input type="checkbox" id="autoConnect"> Start when a board is plugged in</label>
-      <div class="fwbox" id="fwBox">
+      <div class="fwbox esp-only" id="fwBox">
         <button class="btn block" id="flashBtn" type="button">Reinstall firmware</button>
         <p class="note" id="fwNeed" hidden>This board needs the ESP-SDR firmware that comes with this page.</p>
         <div id="flashProg" hidden>
@@ -424,12 +429,21 @@ input[type=number].short { width: 64px; flex: 0 0 64px; }
     <section class="sect">
       <h2>Spectrum <span id="profileTag"></span></h2>
       <div class="row"><span class="lbl">Span</span>
-        <div class="seg" id="spanSeg"><button type="button" data-v="16000000">16</button><button type="button" data-v="40000000">40</button><button type="button" data-v="80000000">80</button></div><span class="val">MHz</span></div>
+        <div class="seg" id="spanSeg"></div><span class="val" id="spanUnit">MHz</span></div>
       <div class="row"><span class="lbl">FFT</span><div class="seg" id="binsSeg"></div></div>
       <div class="row"><label for="gainIn">Gain</label><input class="grow" id="gainIn" type="range" min="0" max="82" step="1"><span class="val wide" id="gainVal"></span></div>
-      <div class="row"><span class="lbl">Detector</span>
+      <div class="row esp-only"><span class="lbl">Detector</span>
         <div class="seg" id="detSeg"><button type="button" data-v="0">Mean</button><button type="button" data-v="1">Max</button></div></div>
-      <label class="check"><input type="checkbox" id="dcFix"> Remove DC per FFT on the chip</label>
+      <label class="check esp-only"><input type="checkbox" id="dcFix"> Remove DC per FFT on the chip</label>
+      <label class="check rtl-only"><input type="checkbox" id="biasTee"> Bias tee: 4.5 V to the antenna (LNA)</label>
+    </section>
+
+    <section class="sect rtl-only" id="audioSect">
+      <h2>Listen <span class="note" id="audioState"></span></h2>
+      <div class="row"><div class="seg" id="modeSeg"><button type="button" data-v="NFM">NFM</button><button type="button" data-v="WFM">WFM</button><button type="button" data-v="AM">AM</button><button type="button" data-v="USB">USB</button><button type="button" data-v="LSB">LSB</button><button type="button" data-v="CW">CW</button></div></div>
+      <div class="row"><label for="volIn">Volume</label><input class="grow" id="volIn" type="range" min="0" max="2" step="0.05"><span class="val" id="volVal"></span></div>
+      <label class="check"><input type="checkbox" id="muteIn"> Mute</label>
+      <p class="note">Tap the spectrum or the waterfall where you want to listen. A tracked satellite moves the listening point with its Doppler shift.</p>
     </section>
 
     <section class="sect">
@@ -493,7 +507,17 @@ input[type=number].short { width: 64px; flex: 0 0 64px; }
 <script>
 "use strict";
 // ---------------------------------------------------------------- constants (match the SDR++ ESP-SDR module)
-const FMIN = 2204e6, FMAX = 2804e6;
+let FMIN = 2204e6, FMAX = 2804e6;      // the connected receiver's range (ESP32-S3 by default)
+let FREF = FMIN;                         // waterfall frequency reference (float32 precision)
+// Receivers: ESP32-S3 (spectrum made on the chip, Web Serial) and RTL-SDR (raw IQ over WebUSB)
+const KINDS = {
+  esp: { min: 2204e6, max: 2804e6, spans: [16e6, 40e6, 80e6], unit: "MHz", lab: (v) => String(v / 1e6), name: "ESP32-S3",
+         defaults: { freqHz: 2245e6, span: 80e6, bins: 2048, gain: 60, zoom: 1 } },
+  rtl: { min: 24e6, max: 1766e6, spans: [2.4e6, 2.048e6, 1.024e6, 0.25e6], unit: "MS/s", lab: (v) => String(+(v / 1e6).toFixed(3)), name: "RTL-SDR",
+         defaults: { freqHz: 145.8e6, span: 2.4e6, bins: 2048, gain: -1, zoom: 1 } },
+};
+let curKind = "esp";
+const RTL_DRIVER_URL = "https://github.com/z2labs/SatHunter-WEB-SDR/releases/download/driver-1.0/SatHunter-RTL-SDR-Driver.exe";
 const SPEC_FALLBACK = [[16e6,6,256,2,1],[16e6,6,1024,2,4],[16e6,6,2048,3,7],[40e6,1,256,5,3],[40e6,1,1024,5,9],
                        [40e6,1,2048,7,17],[80e6,0,256,10,5],[80e6,0,1024,14,16],[80e6,0,2048,14,30]];
 const GAIN_IDX = [0, 10, 20, 40, 50, 60, 70, 82], GAIN_DB = [0, 10.3, 21.1, 30.2, 41.9, 51.3, 61.3, 73.3];
@@ -864,6 +888,12 @@ class DemoSource {
 // @@flasher-begin
 // @@flasher-end
 
+// @@rtl-begin
+// @@rtl-end
+
+// @@dsp-begin
+// @@dsp-end
+
 // @@sat-begin
 // @@sat-end
 
@@ -871,12 +901,20 @@ class DemoSource {
 const DEFAULTS = { freqHz: 2245e6, span: 80e6, bins: 2048, gain: 60, maxHold: false, dcFix: true, ppm: 0,
   step: 1e6, zoom: 1, autoRange: true, dbMin: -85, dbMax: -20, avg: 0.3, wfRate: 310, palette: "classic", peakHold: false, split: 0.38,
   autoConnect: true, keepAwake: true, playing: true, expMode: "snap", expN: 50, expSpan: "full", logIv: 1, rackPinned: false,
+  rtlMode: "NFM", vol: 1, muted: false, rtlBias: false, vfoHz: null, kinds: {},
   satBand: "esp", satSort: "pass", satSearch: "", satSel: null, satTx: 0, satTrack: false, favs: [], loc: null };
 const WF_ALL = 310;   // waterfall rate slider end stop: one row per spectrum, like the desktop app
 const state = { ...DEFAULTS };
 try { Object.assign(state, JSON.parse(localStorage.getItem("sathunter-web-sdr") || "{}")); } catch (e) {}
 function save() { try { localStorage.setItem("sathunter-web-sdr", JSON.stringify(state)); } catch (e) {} }
-const srcSettings = () => ({ freqHz: state.freqHz, span: state.span, bins: state.bins, gain: state.gain, maxHold: state.maxHold, dcFix: state.dcFix, ppm: state.ppm });
+const srcSettings = () => ({ freqHz: state.freqHz, span: state.span, bins: state.bins, gain: state.gain, maxHold: state.maxHold, dcFix: state.dcFix, ppm: state.ppm, bias: !!state.rtlBias });
+// RTL-SDR listening point (VFO): stays inside the received span
+function vfoHz() {
+  const h = state.span * 0.48;
+  if (state.vfoHz == null || state.vfoHz < state.freqHz - h || state.vfoHz > state.freqHz + h) state.vfoHz = state.freqHz;
+  return state.vfoHz;
+}
+function setVfo(f) { state.vfoHz = Math.round(f / 10) * 10; viewDirty = true; save(); updateAudioUi(); }
 
 let source = null, mode = "demo";
 let marker = null;              // marker frequency (Hz) or null
@@ -994,7 +1032,7 @@ class WaterfallGL {
     const n = Math.min(r.n, this.TW);
     gl.bindTexture(gl.TEXTURE_2D, this.tBins); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, this.head, n, 1, gl.RED, gl.FLOAT, r.db, 0);
     // frequencies relative to FMIN keep float32 precision (64 Hz at 600 MHz)
-    this.metaRow[0] = r.c - FMIN; this.metaRow[1] = r.fs; this.metaRow[2] = n; this.metaRow[3] = 1;
+    this.metaRow[0] = r.c - FREF; this.metaRow[1] = r.fs; this.metaRow[2] = n; this.metaRow[3] = 1;
     gl.bindTexture(gl.TEXTURE_2D, this.tMeta); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, this.head, 1, 1, gl.RGBA, gl.FLOAT, this.metaRow);
   }
   draw(v, lo, hi, W, H) {
@@ -1005,7 +1043,7 @@ class WaterfallGL {
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.tLut); gl.uniform1i(u.lut, 2);
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform1f(u.head, this.head); gl.uniform1f(u.rows, this.rows);
-    gl.uniform1f(u.va, v.a - FMIN); gl.uniform1f(u.vb, v.b - FMIN);
+    gl.uniform1f(u.va, v.a - FREF); gl.uniform1f(u.vb, v.b - FREF);
     gl.uniform1f(u.lo, lo); gl.uniform1f(u.hi, hi); gl.uniform1f(u.W, W); gl.uniform1f(u.H, H);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
@@ -1172,7 +1210,16 @@ function drawSpectrum(v) {
   }
   sctx.fillStyle = "#4b5c66"; sctx.fillText("dBFS", 7 * dpr, 10 * dpr);
   // marker
-  if (marker != null && marker >= v.a && marker <= v.b) {
+  if (mode === "rtl") {          // listening point and its passband
+    const f = vfoHz(), md = state.rtlMode || "NFM", bw = MODES[md].bw;
+    const a = md === "USB" || md === "CW" ? f : md === "LSB" ? f - bw : f - bw / 2, b = md === "LSB" ? f : a + bw;
+    if (b >= v.a && a <= v.b) {
+      const xa = (a - v.a) / span * W, xb = Math.max(xa + 2 * dpr, (b - v.a) / span * W), xv = Math.round((f - v.a) / span * W) + 0.5;
+      sctx.fillStyle = "rgba(229,98,79,0.16)"; sctx.fillRect(xa, 0, xb - xa, ph);
+      sctx.strokeStyle = "#e5624f"; sctx.lineWidth = 1.5 * dpr; sctx.beginPath(); sctx.moveTo(xv, 0); sctx.lineTo(xv, ph); sctx.stroke();
+    }
+  }
+  if (marker != null && marker >= v.a && marker <= v.b && mode !== "rtl") {
     const x = Math.round((marker - v.a) / span * W) + 0.5;
     sctx.strokeStyle = "#f0a443"; sctx.lineWidth = 1 * dpr; sctx.setLineDash([4 * dpr, 3 * dpr]);
     sctx.beginPath(); sctx.moveTo(x, 0); sctx.lineTo(x, ph); sctx.stroke(); sctx.setLineDash([]);
@@ -1305,7 +1352,7 @@ function renderDigits() {
 function setFreq(hz, why) {
   hz = Math.round(hz / 1e3) * 1e3;
   if (hz < FMIN || hz > FMAX) {
-    if (why !== "drag" && why !== "wheel") toast("The ESP32-S3 tunes " + FMIN / 1e6 + "–" + FMAX / 1e6 + " MHz. Moved to " + ((hz < FMIN ? FMIN : FMAX) / 1e6).toFixed(0) + " MHz.");
+    if (why !== "drag" && why !== "wheel" && why !== "track") toast("The " + KINDS[curKind].name + " tunes " + FMIN / 1e6 + "–" + FMAX / 1e6 + " MHz. Moved to " + ((hz < FMIN ? FMIN : FMAX) / 1e6).toFixed(0) + " MHz.");
     hz = Math.max(FMIN, Math.min(FMAX, hz));
   }
   if (hz === state.freqHz) return;
@@ -1327,6 +1374,45 @@ function pushSettings() { if (source) source.update(srcSettings()); }
 function resetTraces() { data.n = 0; data.avg = null; data.peak = null; viewDirty = true; resetAutoRange(); }
 const syncStep = segInit("stepSeg", "step", Number);
 const syncSpan = segInit("spanSeg", "span", Number, () => { buildBins(); pushSettings(); });
+function buildSpanSeg() {
+  const k = KINDS[curKind], seg = $("spanSeg"); seg.innerHTML = "";
+  for (const v of k.spans) { const b = document.createElement("button"); b.type = "button"; b.dataset.v = v; b.textContent = k.lab(v); seg.appendChild(b); }
+  if (!k.spans.includes(state.span)) state.span = k.spans[0];
+  $("spanUnit").textContent = k.unit; syncSpan();
+}
+// Switch the page between the ESP32-S3 and the RTL-SDR: each keeps its own frequency, span, bins and gain
+function applyKind(kind, range) {
+  const k = KINDS[kind];
+  if (kind !== curKind) {
+    state.kinds = state.kinds || {};
+    state.kinds[curKind] = { freqHz: state.freqHz, span: state.span, bins: state.bins, gain: state.gain, zoom: state.zoom };
+    Object.assign(state, k.defaults, state.kinds[kind] || {});
+    curKind = kind;
+  }
+  FMIN = range ? range[0] : k.min; FMAX = range ? range[1] : k.max; FREF = FMIN;
+  state.freqHz = Math.max(FMIN, Math.min(FMAX, state.freqHz));
+  document.body.classList.toggle("kind-esp", kind === "esp"); document.body.classList.toggle("kind-rtl", kind === "rtl");
+  $("brandSub").textContent = k.name;
+  if (wgl) { wgl.rows = 0; wgl.alloc(Math.max(WH, 1024)); } rowQueue.length = 0;
+  buildSpanSeg(); buildGain(); buildBins(); syncZoom(); renderDigits(); resetTraces(); viewDirty = true; wfDirty = true; save();
+  if (typeof schedulePasses === "function" && sat.list.length) { sat.passes.clear(); schedulePasses(); renderSatList(); updateSatCard(); }
+}
+// Gain control: ESP32-S3 index 0-82; RTL-SDR the tuner's steps, leftmost = automatic
+let gv = () => {};
+function buildGain() {
+  const g = $("gainIn");
+  if (curKind === "rtl") {
+    const steps = (source && source.gains && source.gains.length) ? source.gains : [0, 0.9, 1.4, 2.7, 3.7, 7.7, 8.7, 12.5, 14.4, 15.7, 16.6, 19.7, 20.7, 22.9, 25.4, 28.0, 29.7, 32.8, 33.8, 36.4, 37.2, 38.6, 40.2, 42.1, 43.4, 43.9, 44.5, 48.0, 49.6];
+    g.min = -1; g.max = steps.length - 1; g.step = 1;
+    if (state.gain > steps.length - 1) state.gain = -1;
+    gv = () => { $("gainVal").textContent = state.gain < 0 ? "auto" : steps[state.gain].toFixed(1) + " dB"; };
+  } else {
+    g.min = 0; g.max = 82; g.step = 1;
+    if (!(state.gain >= 0 && state.gain <= 82)) state.gain = 60;
+    gv = () => { $("gainVal").textContent = state.gain + " · " + gainDb(state.gain).toFixed(0) + " dB"; };
+  }
+  g.value = state.gain; gv();
+}
 const syncDet = segInit("detSeg", "maxHold", (v) => v === "1", () => { resetTraces(); pushSettings(); });
 const syncZoom = segInit("zoomSeg", "zoom", Number, () => { viewDirty = true; });
 function buildBins() {
@@ -1346,10 +1432,17 @@ function syncRangeSliders() {
   $("dbMaxVal").textContent = Math.round(state.dbMax) + " dB"; $("dbMinVal").textContent = Math.round(state.dbMin) + " dB";
 }
 function initControls() {
-  $("gainIn").value = state.gain;
-  const gv = () => { $("gainVal").textContent = state.gain + " · " + gainDb(state.gain).toFixed(0) + " dB"; };
-  gv();
+  buildGain();
   $("gainIn").addEventListener("input", () => { state.gain = Number($("gainIn").value); gv(); save(); pushSettings(); });
+  $("biasTee").checked = !!state.rtlBias;
+  $("biasTee").addEventListener("change", () => { state.rtlBias = $("biasTee").checked; save(); pushSettings(); });
+  segInit("modeSeg", "rtlMode", String, () => { save(); viewDirty = true; updateAudioUi(); });
+  $("volIn").value = state.vol; $("volVal").textContent = Math.round(state.vol * 100) + " %";
+  $("volIn").addEventListener("input", () => { state.vol = Number($("volIn").value); $("volVal").textContent = Math.round(state.vol * 100) + " %"; state.muted = false; $("muteIn").checked = false; audioOut.setVolume(state.vol, false); save(); });
+  $("muteIn").checked = !!state.muted;
+  $("muteIn").addEventListener("change", () => { state.muted = $("muteIn").checked; audioOut.setVolume(state.vol, state.muted); save(); });
+  $("rtlBtn").addEventListener("click", () => (mode === "rtl" ? disconnect() : connectRtl()));
+  $("rtlTopBtn").addEventListener("click", () => (mode === "rtl" ? disconnect() : connectRtl()));
   $("dcFix").checked = state.dcFix;
   $("dcFix").addEventListener("change", () => { state.dcFix = $("dcFix").checked; save(); pushSettings(); });
   $("autoRange").checked = state.autoRange;
@@ -1457,7 +1550,7 @@ function bindPlot(cv, isSpec) {
     }
   });
   const end = (e) => {
-    if (drag && !drag.moved && pts.size === 1) { marker = fAt(e.clientX); viewDirty = true; }
+    if (drag && !drag.moved && pts.size === 1) { if (mode === "rtl") { setVfo(fAt(e.clientX)); } else marker = fAt(e.clientX); viewDirty = true; }
     pts.delete(e.pointerId); if (pts.size < 2) pinch = null; if (!pts.size) drag = null;
   };
   cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
@@ -1658,7 +1751,7 @@ function stopLog() {
 }
 
 // ---------------------------------------------------------------- debug report
-const PAGE_VERSION = "0.4.0";
+const PAGE_VERSION = "0.5.0";
 window.addEventListener("error", (e) => log("[JS] " + e.message + " @ " + (e.filename || "").split("/").pop() + ":" + e.lineno));
 window.addEventListener("unhandledrejection", (e) => log("[JS] unhandled: " + ((e.reason && e.reason.message) || e.reason)));
 function exportDebug() {
@@ -1699,11 +1792,60 @@ const hooks = {
   onSpectrum,
   onStatus: (k, t) => { setStatus(k, t); if (k === "err" && mode === "serial") { mode = "none"; $("connectLabel").textContent = "Connect"; } },
   log,
-  onInfo: (src) => { $("fwInfo").textContent = "Firmware " + src.fwInfo; }
+  onInfo: (src) => { $("fwInfo").textContent = (mode === "rtl" || src instanceof RtlSource ? "" : "Firmware ") + src.fwInfo; },
+  audioCfg: () => ({ on: state.playing, mode: state.rtlMode || "NFM", vfo: vfoHz() })
 };
+function updateAudioUi() {
+  const el = $("audioState"); if (!el) return;
+  el.textContent = mode === "rtl" ? (state.rtlMode || "NFM") + " " + (vfoHz() / 1e6).toFixed(4) + " MHz" : "";
+}
+// RTL-SDR over WebUSB
+async function connectRtl(existing, quiet) {
+  if (!RtlSource.supported()) {
+    $("srcNote").innerHTML = "This browser has no WebUSB. Use <b>Chrome</b> or <b>Edge</b> (Windows, macOS, Linux, Android, ChromeOS).";
+    if (!quiet) toast("No WebUSB in this browser: use Chrome or Edge."); return;
+  }
+  if (connecting || flashing) return;
+  audioOut.ensure();            // a click started this: the browser lets the sound on now
+  const prev = source, s = new RtlSource(hooks);
+  setStatus("busy", "Connecting"); connecting = true; rackTouched();
+  try { await s.connect(existing); }
+  catch (e) {
+    connecting = false;
+    const win = /Windows/i.test(navigator.userAgent), lin = /Linux/i.test(navigator.userAgent) && !/Android/i.test(navigator.userAgent);
+    let msg = e && e.name === "NotFoundError" ? "No RTL-SDR selected." : "RTL-SDR: " + ((e && e.message) || e);
+    if (e && e.driver) msg = win ? "Windows still uses its TV-stick driver for this RTL-SDR. Install the RTL-SDR driver once (one click), unplug and plug the stick, then connect again."
+      : lin ? "Linux's TV driver holds the stick: run  echo 'blacklist dvb_usb_rtl28xxu' | sudo tee /etc/modprobe.d/rtlsdr.conf  and add a udev rule for 0bda:2838 (see the README), then re-plug it."
+      : "The RTL-SDR is busy: close other SDR programs and try again.";
+    log("rtl connect failed: " + ((e && e.message) || e));
+    if (!quiet) { $("srcNote").textContent = msg; toast(msg, true); if (e && e.driver && win) $("rtlNote").classList.add("result", "bad"); showRack(); }
+    setStatus(mode === "demo" ? "demo" : "err", mode === "demo" ? "Demo" : "Not connected");
+    return;
+  }
+  connecting = false;
+  if (prev && prev.stop) prev.stop();
+  if (prev && prev.close && prev !== s) { try { await prev.close(); } catch (e) {} }
+  source = s; mode = "rtl";
+  applyKind("rtl", s.rtl && s.rtl.blogV4 ? [0.5e6, 1766e6] : null);
+  $("demoNote").hidden = true; $("demoBtn").disabled = false; $("demoBtn").textContent = "Back to demo";
+  $("rtlBtn").textContent = "Disconnect RTL-SDR"; $("rtlTopBtn").textContent = "Disconnect";
+  $("srcNote").textContent = "RTL-SDR connected. Tap the spectrum to listen; settings apply at once.";
+  if (!state.playing) { state.playing = true; save(); setPlayUi(); }
+  audioOut.setVolume(state.vol, state.muted);
+  updateAudioUi();
+  source.update(srcSettings());
+}
+// browsers start sound only after a tap: the first one turns it on for an RTL-SDR that started by itself
+document.addEventListener("pointerdown", () => { if (mode === "rtl") audioOut.ensure(); }, { capture: true });
+if (navigator.usb) {
+  navigator.usb.addEventListener("disconnect", (e) => { if (mode === "rtl" && source && source.dev === e.device) { log("RTL-SDR unplugged"); disconnect(); } });
+  navigator.usb.addEventListener("connect", (e) => { if (state.autoConnect && mode !== "serial" && mode !== "rtl" && !connecting && !flashing) setTimeout(() => connectRtl(e.device, true), 600); });
+}
 function startDemo() {
   if (source && source.stop) source.stop();
   source = new DemoSource(hooks); mode = "demo";
+  applyKind("esp");
+  $("rtlBtn").textContent = "Connect RTL-SDR"; $("rtlTopBtn").textContent = "RTL-SDR"; updateAudioUi();
   resetTraces(); buildBins(); source.start(srcSettings());
   setStatus("demo", state.playing ? "Demo" : "Stopped"); $("demoNote").hidden = false; $("fwInfo").textContent = source.fwInfo;
   if (!state.playing) source.pause();
@@ -1739,7 +1881,9 @@ async function connect(anyPort, existingPort, quiet) {
     return;
   }
   if (prev && prev.stop) prev.stop();
+  if (prev && prev instanceof RtlSource) { try { await prev.close(); } catch (e) {} }
   source = s; mode = "serial"; boardPort = s.port;
+  applyKind("esp"); $("rtlBtn").textContent = "Connect RTL-SDR"; $("rtlTopBtn").textContent = "RTL-SDR";
   fwState.needs = s.fwInfo.startsWith("old") || (!!s.fwBuild && !!fwState.bundle && s.fwBuild < (fwState.bundle.build_timestamp || ""));
   updateFwUi();
   resetTraces(); buildBins();
@@ -1839,6 +1983,7 @@ if (state.freqHz < FMIN || state.freqHz > FMAX) {
 }
 startDemo();
 requestAnimationFrame(tick);
+if (navigator.usb && !EMBEDDED) navigator.usb.getDevices().then((ds) => { const d = ds.find((x) => x.vendorId === 0x0bda); if (d && state.autoConnect && mode === "demo") connectRtl(d, true); }).catch(() => {});
 if (navigator.serial && !EMBEDDED) navigator.serial.getPorts().then((ports) => { const p = ports.find((x) => { try { return x.getInfo().usbVendorId === 0x303a; } catch (e) { return false; } }); if (p) autoStart(p); }).catch(() => {});
 </script>
 </body>

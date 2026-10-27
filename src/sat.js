@@ -225,7 +225,7 @@ function renderSatList() {
       const p = r.p, isUp = p && (p.always || p.aos <= now), el = p && !p.always ? p.maxEl : null;
       const elc = el == null ? "" : el >= 45 ? "ok" : el >= 20 ? "mid" : "low";
       const prog = isUp && !p.always ? `<i class="prog"><b style="width:${(100 * (now - p.aos) / (p.los - p.aos)).toFixed(0)}%"></b></i>` : "";
-      const what = r.t ? fmtF(r.t[2]) + " " + esc(r.t[1]) + (inEsp(r.t[2]) ? "" : " · not on the ESP32-S3") : "";
+      const what = r.t ? fmtF(r.t[2]) + " " + esc(r.t[1]) + (inEsp(r.t[2]) ? "" : " · not on this receiver") : "";
       html += `<div class="srow${state.satSel === r.s.n ? " sel" : ""}" data-n="${r.s.n}">
         <div class="sm"><div class="sn">${esc(r.s.name)}${r.s.hu ? '<em class="hu">HU</em>' : ""}</div>
         <div class="sp${isUp ? " up" : ""}">${isUp ? "<i class=\"dot\"></i>" : ""}${passText(p, now)}</div>${prog}
@@ -249,11 +249,20 @@ function selTx(s) {
   const pool = shown.length ? shown : s.tx;
   return pool[Math.min(state.satTx || 0, pool.length - 1)] || null;
 }
+// Demodulator for a downlink: FM-like modes NFM, CW, linear transponders USB
+function modeFor(t) {
+  const m = (t[1] || "").toUpperCase();
+  if (m === "CW") return "CW";
+  if (m === "USB" || m === "LSB" || m === "SSB" || (t[3] && t[3] > t[2])) return m === "LSB" ? "LSB" : "USB";
+  if (m === "AM") return "AM";
+  return "NFM";
+}
 function selectSat(n) {
   if (state.satSel === n) return;
   state.satSel = n; state.satTx = 0; save();
   const s = satSel(), t = selTx(s);
   if (s && t && inEsp(t[2])) { state.satTrack = true; save(); }
+  if (t && mode === "rtl") { state.rtlMode = modeFor(t); save(); }
   sat.trackStarted = false;
   updateSatCard(); renderSatList(); showRadar(true);
 }
@@ -268,8 +277,10 @@ function updateSatLive() {
     const v = view(), m = (v.b - v.a) * 0.18;
     if (!sat.trackStarted || sat.live.f < v.a + m || sat.live.f > v.b - m) {
       sat.trackStarted = true;
-      setFreq(Math.round(sat.live.f / 1e5) * 1e5, "track");
+      // RTL-SDR: keep the satellite a little off the centre (away from the DC spike)
+      setFreq(Math.round((sat.live.f - (mode === "rtl" ? state.span * 0.15 : 0)) / 1e4) * 1e4, "track");
     }
+    if (mode === "rtl") setVfo(sat.live.f);     // listen where the satellite is now
   }
   viewDirty = true;
 }
@@ -290,7 +301,7 @@ function updateSatCard() {
   if (t && lv) {
     const ok = inEsp(t[2]);
     $("scDop").innerHTML = "Doppler <b>" + (lv.dop >= 0 ? "+" : "") + (lv.dop / 1e3).toFixed(1) + " kHz</b> → " + fmtF(lv.f) +
-      (ok ? "" : '<br><span class="warnt">This downlink is outside the ESP32-S3\'s 2204–2804 MHz: pass and radar only.</span>');
+      (ok ? "" : '<br><span class="warnt">This downlink is outside the ' + KINDS[curKind].name + "'s " + (FMIN / 1e6).toFixed(0) + "–" + (FMAX / 1e6).toFixed(0) + ' MHz: pass and radar only' + (curKind === "esp" && t[2] < 1766e6 ? " (an RTL-SDR receives it)" : "") + '.</span>');
   } else $("scDop").textContent = "";
   $("scStar").textContent = state.favs.includes(s.n) ? "★" : "☆";
   $("scStar").classList.toggle("on", state.favs.includes(s.n));
@@ -493,7 +504,7 @@ function initSats() {
   });
   $("scStar").addEventListener("click", () => state.satSel && toggleFav(state.satSel));
   $("scClose").addEventListener("click", () => { state.satSel = null; state.satTrack = false; save(); sat.live = null; updateSatCard(); renderSatList(); viewDirty = true; });
-  $("scTx").addEventListener("change", () => { state.satTx = Number($("scTx").value); save(); sat.trackStarted = false; updateSatLive(); updateSatCard(); });
+  $("scTx").addEventListener("change", () => { state.satTx = Number($("scTx").value); const t = selTx(satSel()); if (t && mode === "rtl") state.rtlMode = modeFor(t); save(); sat.trackStarted = false; updateSatLive(); updateSatCard(); });
   $("scTrack").addEventListener("click", () => { state.satTrack = !state.satTrack; sat.trackStarted = false; save(); updateSatLive(); updateSatCard(); });
   $("scSim").addEventListener("click", simulatePass);
   $("satsBtn").addEventListener("click", () => setSats(!$("sats").classList.contains("open")));

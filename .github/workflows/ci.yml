@@ -26,6 +26,7 @@ jobs:
           python test/gen.py
           node test/run.mjs
           node test/md5test.mjs
+          node test/rtl.mjs
       - name: Browser tests against an emulated board
         run: |
           python test/live.py
@@ -35,6 +36,7 @@ jobs:
           python test/wrongport.py
           python test/rack.py
           python test/sats.py
+          python test/rtlweb.py
       - name: Satellite data builder (fixture)
         run: |
           python test/fixtures/make_fixture.py
