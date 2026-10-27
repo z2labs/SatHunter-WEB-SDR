@@ -1,0 +1,82 @@
+name: RTL-SDR driver installer
+
+# Builds driver/Output/SatHunter-RTL-SDR-Driver.exe: libwdi's wdi-simple (LGPL-3.0) with the
+# WinUSB redistributable, packed by Inno Setup. Run it by hand with a release tag to publish it.
+on:
+  push:
+    paths: ["driver/**", ".github/workflows/driver.yml"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Publish as this release tag (e.g. driver-1.0), empty = artifact only"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  LIBWDI_COMMIT: 30df0c0e051b0132c4b9ebed8c054bc8eb3aaaec
+  WDK_URL: https://go.microsoft.com/fwlink/p/?LinkID=253170
+  LIBUSB0_URL: https://github.com/mcuee/libusb-win32/releases/download/release_1.4.0.0/libusb-win32-bin-1.4.0.0.zip
+  LIBUSBK_URL: https://github.com/mcuee/libusbk/releases/download/V3.1.0.0/libusbK-3.1.0.0-bin.7z
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: libwdi source and redistributables
+        shell: cmd
+        run: |
+          git clone https://github.com/pbatard/libwdi libwdi
+          cd libwdi
+          git checkout %LIBWDI_COMMIT%
+          curl -L %WDK_URL% -o wdk-redist.msi
+          curl -L %LIBUSB0_URL% -o libusb0-redist.zip
+          curl -L %LIBUSBK_URL% -o libusbk-redist.7z
+          msiexec /a wdk-redist.msi /qn TARGETDIR=%CD%\wdk
+          7z x libusb0-redist.zip
+          7z x libusbk-redist.7z
+          del *.zip *.7z
+          move libusb-win32* libusb0
+          move libusbK* libusbk
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build wdi-simple (32-bit, runs on every Windows)
+        shell: cmd
+        run: |
+          cd libwdi
+          msbuild libwdi.sln /m /p:Configuration=Release,Platform=Win32,BuildMacros="WDK_DIR=\"../wdk/Windows Kits/8.0\";LIBUSB0_DIR=\"../libusb0\";LIBUSBK_DIR=\"../libusbk/bin\""
+          if not exist Win32\Release\examples\wdi-simple.exe (echo ::error title=libwdi::wdi-simple.exe was not built & exit /b 1)
+          dir Win32\Release\examples
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup *\ISCC.exe", "C:\Program Files\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y | Out-Null
+            $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup *\ISCC.exe", "C:\Program Files\Inno Setup *\ISCC.exe" | Select-Object -First 1
+          }
+          $ver = if ("${{ inputs.release_tag }}") { "${{ inputs.release_tag }}" -replace '^driver-', '' } else { "1.0" }
+          & $iscc.FullName "/DWdiSimple=$pwd\libwdi\Win32\Release\examples\wdi-simple.exe" "/DAppVer=$ver" driver\rtlsdr-driver.iss
+          if ($LASTEXITCODE) { Write-Output "::error title=Inno Setup::ISCC failed"; exit 1 }
+          Get-FileHash driver\Output\SatHunter-RTL-SDR-Driver.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SatHunter-RTL-SDR-Driver
+          path: driver/Output/SatHunter-RTL-SDR-Driver.exe
+
+      - name: Release
+        if: ${{ inputs.release_tag != '' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.release_tag }}" driver/Output/SatHunter-RTL-SDR-Driver.exe `
+            --title "RTL-SDR driver installer ${{ inputs.release_tag }}" `
+            --notes "One-click WinUSB driver for RTL-SDR Blog V3 / V4 and RTL2832U sticks on Windows (instead of Zadig). Windows may show 'Windows protected your PC' for this unsigned installer: More info -> Run anyway. Built from libwdi ${{ env.LIBWDI_COMMIT }} (LGPL-3.0)."

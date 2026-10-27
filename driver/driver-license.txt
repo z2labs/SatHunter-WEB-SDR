@@ -1,0 +1,15 @@
+SatHunter RTL-SDR driver installer
+
+This installer runs wdi-simple from libwdi (https://github.com/pbatard/libwdi), the library behind
+Zadig, licensed under the GNU Lesser General Public License v3. The source of the exact libwdi
+version used is at the address above (the commit is named in the SatHunter-WEB-SDR repository,
+.github/workflows/driver.yml).
+
+The driver it installs is Microsoft's WinUSB, which is part of Windows. To make Windows accept the
+driver package, libwdi creates a certificate on this computer, signs the package with it and then
+deletes the private key, the same way Zadig does.
+
+To go back to the original driver: Device Manager > the RTL2832U device > Uninstall device (tick
+"Delete the driver software"), then unplug and plug the stick again.
+
+Z2Labs, https://github.com/z2labs/SatHunter-WEB-SDR (GPL-3.0)
