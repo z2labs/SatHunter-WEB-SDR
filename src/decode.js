@@ -85,27 +85,53 @@ function aprsPosition(info) {
   return isFinite(lat) && isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? [lat, lon] : null;
 }
 
-// ---- AFSK1200 decoder: FM discriminator around 1700 Hz, DPLL, NRZI, HDLC, CRC, bit repair
+// ---- AFSK1200 decoder: three detectors on the same audio (FM discriminator with a narrow and a wide
+// low-pass, and a mark/space tone detector), each with DPLL, NRZI, HDLC, CRC and bit repair; a frame
+// two detectors decode is reported once. Real recordings differ in twist, de-emphasis and bandwidth
+// and each detector wins on some (SatNOGS test vectors in sh-dsp/testdata/satnogs).
 
-class AfskDecoder {
-  constructor(fs) {
-    this.fs = fs;
-    this.mix = new MixLp(1700, fs, decLowpass(650, 500, fs));
-    this.z = [0, 0]; this.lr = 1; this.li = 0;
-    this.dwinN = Math.max(1, Math.round(fs / 1200 * 0.5)); this.dwin = new Float32Array(this.dwinN); this.dk = 0; this.dsum = 0;
+const keyOf = (b, n) => { let k = ""; for (let i = 0; i < n; i++) k += String.fromCharCode(b[i]); return k; };
+
+class AfskChain {
+  constructor(fs, { tones = false, lpCut = 650 } = {}) {
+    this.tones = tones;
+    if (tones) {
+      this.tn = Math.max(2, Math.round(fs / 1200));
+      this.tph = [0, 0]; this.tstep = [2 * Math.PI * 1200 / fs, 2 * Math.PI * 2200 / fs];
+      this.tb = new Float64Array(4 * this.tn); this.tk = 0; this.ts = [0, 0, 0, 0];
+    } else {
+      this.mix = new MixLp(1700, fs, decLowpass(lpCut, 500, fs));
+      this.z = [0, 0]; this.lr = 1; this.li = 0;
+      this.dwinN = Math.max(1, Math.round(fs / 1200 * 0.5)); this.dwin = new Float32Array(this.dwinN); this.dk = 0;
+    }
+    this.dsum = 0;
     this.pll = 0; this.pllStep = 1200 / fs; this.prevSign = false;
     this.lastLevel = false; this.lastConf = 0;
     this.buf = new Uint8Array(512); this.nb = 0; this.conf = []; this.ones = 0; this.shift = 0; this.nbits = 0; this.inFrame = false;
-    this.frames = []; this.count = 0; this.badCrc = 0; this.fixed = 0;
+    this.out = []; this.badCrc = 0; this.fixed = 0;
   }
   process(audio) {
-    const z = this.z;
     for (let i = 0; i < audio.length; i++) {
-      this.mix.push(audio[i], z);
-      // instantaneous frequency: > 0 = space (2200 Hz), < 0 = mark (1200 Hz)
-      const d = Math.atan2(z[1] * this.lr - z[0] * this.li, z[0] * this.lr + z[1] * this.li);
-      this.lr = z[0]; this.li = z[1];
-      this.dsum += d - this.dwin[this.dk]; this.dwin[this.dk] = d; this.dk = (this.dk + 1) % this.dwinN;
+      const a = audio[i];
+      if (this.tones) {
+        // |space| - |mark| over the last bit (two sliding correlators)
+        const k = this.tk * 4, tb = this.tb, ts = this.ts;
+        for (let t = 0; t < 2; t++) {
+          const re = a * Math.cos(this.tph[t]), im = -a * Math.sin(this.tph[t]);
+          this.tph[t] += this.tstep[t]; if (this.tph[t] > Math.PI) this.tph[t] -= 2 * Math.PI;
+          ts[2 * t] += re - tb[k + 2 * t]; ts[2 * t + 1] += im - tb[k + 2 * t + 1];
+          tb[k + 2 * t] = re; tb[k + 2 * t + 1] = im;
+        }
+        this.tk = (this.tk + 1) % this.tn;
+        this.dsum = Math.hypot(ts[2], ts[3]) - Math.hypot(ts[0], ts[1]);
+      } else {
+        const z = this.z;
+        this.mix.push(a, z);
+        // instantaneous frequency: > 0 = space (2200 Hz), < 0 = mark (1200 Hz)
+        const d = Math.atan2(z[1] * this.lr - z[0] * this.li, z[0] * this.lr + z[1] * this.li);
+        this.lr = z[0]; this.li = z[1];
+        this.dsum += d - this.dwin[this.dk]; this.dwin[this.dk] = d; this.dk = (this.dk + 1) % this.dwinN;
+      }
       const mark = this.dsum < 0;
       if (mark !== this.prevSign) { this.prevSign = mark; this.pll += (0.5 - this.pll) * 0.3; }
       this.pll += this.pllStep;
@@ -137,10 +163,10 @@ class AfskDecoder {
     const n = this.nb;
     if (this.inFrame && n >= 17) {
       const got = this.buf[n - 2] | (this.buf[n - 1] << 8);
-      let f = null;
-      if (crc16x25(this.buf, n - 2) === got) f = ax25Parse(this.buf, n - 2);
-      else { f = this.repair(n); if (f) this.fixed++; else this.badCrc++; }
-      if (f) { f.n = ++this.count; f.time = Date.now(); f.pos = aprsPosition(f.info); this.frames.push(f); if (this.frames.length > 100) this.frames.shift(); }
+      let r = null;
+      if (crc16x25(this.buf, n - 2) === got) { const f = ax25Parse(this.buf, n - 2); if (f) r = { f, key: keyOf(this.buf, n - 2) }; }
+      else { r = this.repair(n); if (r) this.fixed++; else this.badCrc++; }
+      if (r) this.out.push(r);
     }
     this.inFrame = true; this.nb = 0; this.conf.length = 0; this.nbits = 0; this.shift = 0;
   }
@@ -153,11 +179,38 @@ class AfskDecoder {
       for (const w of [1, 2]) {
         if (k + w > n * 8) continue;
         for (let j = k; j < k + w; j++) b[j >> 3] ^= 1 << (j & 7);
-        if (ok()) { const f = ax25Parse(b, n - 2); if (f) return f; }
+        if (ok()) { const f = ax25Parse(b, n - 2); if (f) return { f, key: keyOf(b, n - 2) }; }
         for (let j = k; j < k + w; j++) b[j >> 3] ^= 1 << (j & 7);
       }
     }
     return null;
+  }
+}
+
+class AfskDecoder {
+  constructor(fs, { multi = true } = {}) {
+    this.fs = fs;
+    this.chains = [new AfskChain(fs)];
+    if (multi) this.chains.push(new AfskChain(fs, { tones: true }), new AfskChain(fs, { lpCut: 3000 }));
+    this.seen = []; this.samples = 0;
+    this.frames = []; this.count = 0; this.badCrc = 0; this.fixed = 0;
+  }
+  process(audio) {
+    for (const c of this.chains) c.process(audio);
+    this.samples += audio.length;
+    const now = this.samples;
+    this.seen = this.seen.filter(([t]) => now - t <= this.fs);
+    for (const c of this.chains) {
+      for (const { f, key } of c.out) {
+        if (this.seen.some(([, k]) => k === key)) continue;
+        this.seen.push([now, key]);
+        f.n = ++this.count; f.time = Date.now(); f.pos = aprsPosition(f.info);
+        this.frames.push(f); if (this.frames.length > 100) this.frames.shift();
+      }
+      c.out.length = 0;
+    }
+    this.badCrc = this.chains[0].badCrc;
+    this.fixed = this.chains.reduce((s, c) => s + c.fixed, 0);
   }
 }
 

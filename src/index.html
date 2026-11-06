@@ -1815,7 +1815,7 @@ function stopLog() {
 }
 
 // ---------------------------------------------------------------- debug report
-const PAGE_VERSION = "0.6.0";
+const PAGE_VERSION = "0.6.2";
 window.addEventListener("error", (e) => log("[JS] " + e.message + " @ " + (e.filename || "").split("/").pop() + ":" + e.lineno));
 window.addEventListener("unhandledrejection", (e) => log("[JS] unhandled: " + ((e.reason && e.reason.message) || e.reason)));
 function exportDebug() {
