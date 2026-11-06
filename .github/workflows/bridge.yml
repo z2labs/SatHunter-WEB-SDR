@@ -62,7 +62,7 @@ jobs:
           path: out/*
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-latest   # macos-14 is retired
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -163,6 +163,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -la dist
+          # a second run (e.g. after the macOS build) adds or replaces files in the same release
+          if gh release view "${{ inputs.release_tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "${{ inputs.release_tag }}" dist/* --clobber --repo "${{ github.repository }}"
+            exit 0
+          fi
           gh release create "${{ inputs.release_tag }}" dist/* --repo "${{ github.repository }}" \
             --title "SatHunter Bridge ${{ inputs.release_tag }}" \
             --notes "SatHunter Bridge: the RTL-SDR and the ESP32-S3 SDR in any browser, Firefox too, with nothing to type.
