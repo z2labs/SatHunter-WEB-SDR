@@ -177,7 +177,67 @@ const audioOut = new AudioOut();
 // ---------------------------------------------------------------- RTL-SDR source (WebUSB): IQ in, spectrum rows and audio out
 // 15 reads of 128 kB in flight (as librtlsdr): ~400 ms at 2.4 MS/s before the stick's FIFO
 // overflows while the browser is busy (Firefox, slow laptops); with 4 samples were lost
-const RTL_BLOCK = 131072, RTL_INFLIGHT = 15, RTL_FPS = 90, RTL_AVG = 2;
+const RTL_BLOCK = 131072, RTL_INFLIGHT = 15, RTL_FPS = 90, RTL_AVG = 2, RTL_WORKER_Q = 6;
+
+// The IQ work, the same in the worker and (as a fallback) on the page: spectrum rows and audio.
+class DspCore {
+  run(job, u8) {
+    const out = [], fs = job.fs, total = u8.length >> 1;
+    if (!this.fft || this.fft.n !== job.bins) this.setupFft(job.bins);
+    const n = this.fft.n;
+    this.rowCarry = (this.rowCarry || 0) + total / (fs / RTL_FPS);
+    let rows = Math.floor(this.rowCarry); this.rowCarry -= rows;
+    rows = Math.min(rows, Math.floor(total / (n * RTL_AVG)));
+    const re = this.re, im = this.im, w = this.win, acc = this.acc, k = 1 / (RTL_AVG * this.wsum * this.wsum);
+    for (let r = 0; r < rows; r++) {
+      const start = Math.floor(r * (total - n * RTL_AVG) / Math.max(1, rows - 1 || 1));
+      acc.fill(0);
+      for (let a = 0; a < RTL_AVG; a++) {
+        const p0 = start + a * n;
+        for (let i = 0; i < n; i++) { const j = 2 * (p0 + i); re[i] = (u8[j] - 127.4) / 128 * w[i]; im[i] = (u8[j + 1] - 127.4) / 128 * w[i]; }
+        this.fft.run(re, im);
+        for (let i = 0; i < n; i++) acc[i] += re[i] * re[i] + im[i] * im[i];
+      }
+      const db = new Float32Array(n);
+      for (let i = 0; i < n; i++) { const v = acc[(i + n / 2) % n] * k; db[i] = v > 1e-14 ? 10 * Math.log10(v) : -140; }
+      out.push({ t: "row", db, n, fs, c: job.freqHz });
+    }
+    const a = job.audio;
+    if (a && Math.abs(a.off) < fs / 2) {
+      if (!this.demod || this.demod.mode !== a.mode || this.demod.fs !== fs || this.demod.bw !== a.bw) this.demod = new Demod(fs, a.mode, a.bw);
+      const au = this.demod.process(u8, a.off);
+      out.push({ t: "audio", au, ar: this.demod.ar, mode: a.mode });
+    }
+    return out;
+  }
+  setupFft(n) {
+    this.fft = new FFT(n); this.re = new Float32Array(n); this.im = new Float32Array(n); this.acc = new Float32Array(n);
+    this.win = new Float32Array(n); let s = 0;
+    for (let i = 0; i < n; i++) { const a = 2 * Math.PI * i / (n - 1); this.win[i] = 0.35875 - 0.48829 * Math.cos(a) + 0.14128 * Math.cos(2 * a) - 0.01168 * Math.cos(3 * a); s += this.win[i]; }
+    this.wsum = s; this.rowCarry = 0;
+  }
+}
+
+// A worker built from the classes above (the page is one file, so the worker is a Blob of their source)
+function dspWorker() {
+  try {
+    if (typeof Worker === "undefined" || typeof Blob === "undefined") return null;
+    const src = [
+      "const RTL_FPS = " + RTL_FPS + ", RTL_AVG = " + RTL_AVG + ";",
+      "const MODES = " + JSON.stringify(MODES) + ";",
+      lowpassTaps.toString(), CDecim.toString(), RDecim.toString(), FFT.toString(), Demod.toString(), DspCore.toString(),
+      "const core = new DspCore();",
+      "onmessage = (e) => { const j = e.data; let out = []; try { out = core.run(j, new Uint8Array(j.iq)); } catch (x) { postMessage({ t: 'error', msg: String(x && x.message || x) }); }",
+      // audio may be a view on the demodulator's own buffer: send a copy
+      "  for (const m of out) { try { if (m.au) { m.au = Float32Array.from(m.au); postMessage(m, [m.au.buffer]); } else postMessage(m, m.db ? [m.db.buffer] : []); } catch (x) { postMessage({ t: 'error', msg: String(x && x.message || x) }); } }",
+      "  postMessage({ t: 'done' }); };",
+    ].join("\n");
+    const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+    const w = new Worker(url);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return w;
+  } catch (e) { return null; }
+}
 class RtlSource {
   constructor(hooks) {
     this.h = hooks; this.dev = null; this.rtl = null; this.open = false; this.paused = false;
@@ -265,50 +325,41 @@ class RtlSource {
     }
     for (const p of q) p.catch(() => {});
   }
-  setupFft() {
-    const n = this.cur.bins || 2048;
-    this.fft = new FFT(n); this.re = new Float32Array(n); this.im = new Float32Array(n); this.acc = new Float32Array(n);
-    this.win = new Float32Array(n); let s = 0;
-    for (let i = 0; i < n; i++) { const a = 2 * Math.PI * i / (n - 1); this.win[i] = 0.35875 - 0.48829 * Math.cos(a) + 0.14128 * Math.cos(2 * a) - 0.01168 * Math.cos(3 * a); s += this.win[i]; }
-    this.wsum = s; this.rowCarry = 0;
-  }
+  // IQ blocks go to a Web Worker (FFT rows + demodulation) so the page's own thread only draws and
+  // plays; with no worker (very old browser) the same code runs here. At most RTL_WORKER_Q blocks
+  // wait for it: when it falls behind, blocks are dropped (stats.lost) instead of lagging.
   process(u8) {
     const c = this.cur, fs = c.span;
     if (this.toSkip > 0) { const k = Math.min(this.toSkip, u8.length >> 1); this.toSkip -= k; u8 = u8.subarray(k * 2); if (!u8.length) return; }
-    // spectrum: RTL_FPS rows a second, each the average of RTL_AVG FFTs taken inside this block
-    if (!this.fft || this.fft.n !== c.bins) this.setupFft();
-    const n = this.fft.n, total = u8.length >> 1;
-    this.rowCarry = (this.rowCarry || 0) + total / (fs / RTL_FPS);
-    let rows = Math.floor(this.rowCarry); this.rowCarry -= rows;
-    rows = Math.min(rows, Math.floor(total / (n * RTL_AVG)));
-    const re = this.re, im = this.im, w = this.win, acc = this.acc, k = 1 / (RTL_AVG * this.wsum * this.wsum);
-    for (let r = 0; r < rows; r++) {
-      const start = Math.floor(r * (total - n * RTL_AVG) / Math.max(1, rows - 1 || 1));
-      acc.fill(0);
-      for (let a = 0; a < RTL_AVG; a++) {
-        const p0 = start + a * n;
-        for (let i = 0; i < n; i++) { const j = 2 * (p0 + i); re[i] = (u8[j] - 127.4) / 128 * w[i]; im[i] = (u8[j + 1] - 127.4) / 128 * w[i]; }
-        this.fft.run(re, im);
-        for (let i = 0; i < n; i++) acc[i] += re[i] * re[i] + im[i] * im[i];
-      }
-      const db = new Float32Array(n);
-      for (let i = 0; i < n; i++) { const v = acc[(i + n / 2) % n] * k; db[i] = v > 1e-14 ? 10 * Math.log10(v) : -140; }
-      this.stats.frames++;
-      this.h.onSpectrum(db, n, fs, c.freqHz);
-    }
-    // audio
     const a = this.h.audioCfg ? this.h.audioCfg() : null;
-    if (a && a.on) {
-      if (!this.demod || this.demod.mode !== a.mode || this.demod.fs !== fs || this.demod.bw !== (a.bw || MODES[a.mode].bw)) this.demod = new Demod(fs, a.mode, a.bw);
-      const off = a.vfo - c.freqHz;
-      if (Math.abs(off) < fs / 2) {
-        const au = this.demod.process(u8, off);
-        audioOut.push(au, this.demod.ar);
-        if (this.h.onAudio) this.h.onAudio(au, this.demod.ar, a.mode); // decoders
+    const job = { fs, freqHz: c.freqHz, bins: c.bins || 2048, audio: a && a.on ? { mode: a.mode, bw: a.bw || MODES[a.mode].bw, off: a.vfo - c.freqHz } : null };
+    const w = this.worker === undefined ? (this.worker = dspWorker()) : this.worker;
+    if (w) {
+      if (this.wq >= RTL_WORKER_Q) { this.stats.lost++; return; }
+      this.wq = (this.wq || 0) + 1;
+      if (!w.onmessage) {
+        w.onmessage = (m) => this.fromWorker(m.data);
+        // the worker cannot run (a browser policy): do the work here from now on
+        w.onerror = (e) => { this.h.log("rtl: dsp worker failed (" + (e.message || "error") + "), processing on the page"); w.terminate(); this.worker = null; this.wq = 0; };
       }
+      // copy out of the transfer buffer (a WebUSB / bridge buffer may be a view on a bigger one)
+      const copy = u8.slice();
+      job.iq = copy.buffer;
+      w.postMessage(job, [copy.buffer]);
+      return;
     }
+    if (!this.local) this.local = new DspCore();
+    for (const m of this.local.run(job, u8)) this.fromWorker(m);
+  }
+  fromWorker(m) {
+    if (m.t === "done") { this.wq = Math.max(0, (this.wq || 1) - 1); return; }
+    if (m.t === "error") { if (!this.wErr) this.h.log("rtl: dsp: " + m.msg); this.wErr = true; return; }
+    if (!this.open) return;
+    if (m.t === "row") { this.stats.frames++; if (!this.paused) this.h.onSpectrum(m.db, m.n, m.fs, m.c); }
+    else if (m.t === "audio") { audioOut.push(m.au, m.ar); if (this.h.onAudio) this.h.onAudio(m.au, m.ar, m.mode); }
   }
   async close() {
+    if (this.worker) { this.worker.terminate(); this.worker = null; }
     if (!this.open && !this.rtl) return;
     this.open = false;
     await sleep(60);
