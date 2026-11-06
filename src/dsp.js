@@ -141,7 +141,10 @@ class Demod {
 
 // Audio out: short AudioBuffers scheduled back to back (the browser resamples to its own rate)
 class AudioOut {
-  constructor() { this.ctx = null; this.t = 0; this.gain = null; this.vol = 1; this.muted = false; this.under = 0; }
+  // lead = how far ahead of the speaker the audio is queued. It starts at 150 ms and grows by
+  // 100 ms (up to 600 ms) after each dropout, so bursty USB / bridge delivery and browser pauses
+  // (Firefox, slow laptops) stop breaking the sound; it shrinks back slowly while all is well.
+  constructor() { this.ctx = null; this.t = 0; this.gain = null; this.vol = 1; this.muted = false; this.under = 0; this.lead = 0.15; this.okSince = 0; }
   ensure() {
     if (!this.ctx) {
       const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return false;
@@ -157,7 +160,14 @@ class AudioOut {
     const b = this.ctx.createBuffer(1, samples.length, rate); b.copyToChannel(samples instanceof Float32Array ? samples : Float32Array.from(samples), 0);
     const s = this.ctx.createBufferSource(); s.buffer = b; s.connect(this.gain);
     const now = this.ctx.currentTime;
-    if (this.t < now + 0.02 || this.t > now + 0.5) { if (this.t < now) this.under++; this.t = now + 0.08; }   // start / resync with a little latency
+    if (this.t < now + 0.005) {                 // ran dry (or the first block): queue with more lead
+      if (this.t > 0) { this.under++; this.lead = Math.min(0.6, this.lead + 0.1); }
+      this.t = now + this.lead; this.okSince = now;
+    } else if (this.t > now + this.lead + 0.4) {  // far too much queued (clock drift): catch up
+      this.t = now + this.lead;
+    } else if (now - this.okSince > 60 && this.lead > 0.15) {
+      this.lead = Math.max(0.15, this.lead - 0.05); this.okSince = now;
+    }
     s.start(this.t); this.t += samples.length / rate;
   }
   close() { if (this.ctx) { this.ctx.close().catch(() => {}); this.ctx = null; } }

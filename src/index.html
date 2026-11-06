@@ -1832,6 +1832,7 @@ function exportDebug() {
     "mode: " + mode + ", port: " + portInfo + ", firmware: " + (source && source.fwInfo ? source.fwInfo : "-") + (source && source.fwBuild ? " (" + source.fwBuild + ")" : ""),
     "caps: " + (source && source.caps ? source.caps.trim() : "-"),
     "stats: " + JSON.stringify({ frames: st.frames, lost: st.lost, crc: st.crc, bytes: st.bytes, restarts: st.restarts }),
+    "audio: " + (audioOut.ctx ? audioOut.ctx.state + ", " + audioOut.ctx.sampleRate + " Hz, dropouts " + audioOut.under + ", lead " + Math.round(audioOut.lead * 1000) + " ms" : "off"),
     "", "settings:", JSON.stringify(state, null, 1), "", "log:", ...logLines
   ];
   downloadText("sathunter-web-sdr-report-" + stamp() + ".txt", lines.join("\n") + "\n");
