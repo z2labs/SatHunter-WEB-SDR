@@ -197,6 +197,7 @@ const RtlSdrUsb = (() => {
       this.initDone = false;
       this.lastInputSel = null;
       this.lastLo = 0; // LO actually programmed by the last set_pll (Hz)
+      this.loError = 0; // its error against the requested LO, Hz (fractional)
     }
 
     // ---- register access (r82xx_write / r82xx_read), with the RW register cache
@@ -393,7 +394,6 @@ const RtlSdrUsb = (() => {
       // integer arithmetic mirrors the u8/u32 semantics of the Rust/C code
       const freqKhz = Math.floor((freq + 500) / 1000);
       const pllRef = this.xtal;
-      const pllRefKhz = Math.floor((this.xtal + 500) / 1000);
 
       await this.writeRegMask(0x10, 0, 0x10); // refdiv2 = 0
       await this.writeRegMask(0x1a, 0x00, 0x0c); // PLL auto-tune = 128 kHz
@@ -418,8 +418,15 @@ const RtlSdrUsb = (() => {
       await this.writeRegMask(0x10, (divNum << 5) & 0xff, 0xe0);
 
       const vcoFreq = freq * mixDiv;
-      const nint = Math.floor(vcoFreq / (2 * pllRef)) & 0xff;
-      let vcoFra = Math.floor((vcoFreq - 2 * pllRef * nint) / 1000);
+      let nint = Math.floor(vcoFreq / (2 * pllRef)) & 0xff;
+      // Fractional part for the sigma-delta modulator, in 1/65536 of 2 * pll_ref, rounded in Hz
+      // (the original truncated it to whole kHz at the VCO: up to 1 kHz / mixDiv of LO error,
+      // which changed with the IF and so with the sample rate; SatHunterSDR lab 2026-11-02)
+      const twoRef = 2 * pllRef;
+      let sdm = Math.floor(((vcoFreq - twoRef * nint) * 65536 + twoRef / 2) / twoRef);
+      if (sdm >= 65536) { nint += 1; sdm = 0; }
+      const loActual = (twoRef * (nint + sdm / 65536)) / mixDiv;
+      this.loError = loActual - freq; // actual minus requested LO, Hz (fractional)
       if (nint > Math.floor(128 / vcoPowerRef) - 1) throw new Error(`R82xx: no valid PLL values for ${freq} Hz`);
 
       // Nint = 4 * Ni2c + Si2c + 13 (with the original's u8 wrap-around)
@@ -427,22 +434,10 @@ const RtlSdrUsb = (() => {
       const si = (nint - 4 * ni - 13) & 0xff;
       await this.writeRegs(0x14, [(ni + ((si << 6) & 0xff)) & 0xff]);
 
-      await this.writeRegMask(0x12, vcoFra === 0 ? 0x08 : 0x00, 0x08); // pw_sdm
-
-      // SDM calculator
-      let sdm = 0, nSdm = 2;
-      while (vcoFra > 1) {
-        const step = Math.floor((2 * pllRefKhz) / nSdm);
-        if (vcoFra > step) {
-          sdm += Math.floor(32768 / (nSdm / 2));
-          vcoFra -= step;
-          if (nSdm >= 0x8000) break;
-        }
-        nSdm *= 2;
-      }
+      await this.writeRegMask(0x12, sdm === 0 ? 0x08 : 0x00, 0x08); // pw_sdm
       await this.writeRegs(0x16, [(sdm >> 8) & 0xff]);
       await this.writeRegs(0x15, [sdm & 0xff]);
-      this.lastLo = Math.round((2 * pllRef * (nint + sdm / 65536)) / mixDiv);
+      this.lastLo = Math.round(loActual);
 
       for (let i = 0; i < 2; i++) {
         data = await this.readReg(0x00, 3);
@@ -690,7 +685,8 @@ const RtlSdrUsb = (() => {
     _setI2cRepeater(on) { return this.io.demodWriteReg(1, 0x01, on ? 0x18 : 0x10, 1); }
 
     async _setIfFreq(freq) {
-      const ifFreq = -Math.trunc((freq * 4194304) / DEF_RTL_XTAL_FREQ) | 0; // 2^22
+      // fractional input: the register has 28.8 MHz / 2^22 = 6.9 Hz steps
+      const ifFreq = -Math.round((freq * 4194304) / DEF_RTL_XTAL_FREQ) | 0; // 2^22
       await this.io.demodWriteReg(1, 0x19, (ifFreq >> 16) & 0x3f, 1);
       await this.io.demodWriteReg(1, 0x1a, (ifFreq >> 8) & 0xff, 1);
       await this.io.demodWriteReg(1, 0x1b, ifFreq & 0xff, 1);
@@ -725,6 +721,10 @@ const RtlSdrUsb = (() => {
 
     async _setCenterFreq(freq) {
       const actual = await this._withRepeater(() => this._t.setFreq(freq));
+      // The PLL lands up to half a step off (R820T: ~110 Hz steps at 430 MHz): move the RTL2832's
+      // IF by the same amount (6.9 Hz steps) so the centre is where it was asked. With the LO
+      // above the signal, centre = LO - IF, so IF += LO error.
+      await this._setIfFreq(this._t.getIfFreq() + this._t.loError);
       this.freq = freq;
       this.actualFreq = actual;
       return actual;

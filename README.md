@@ -20,7 +20,11 @@ The browser sibling of [SatHunterSDR](https://github.com/z2labs/SatHunter-SDR), 
 
 ## RTL-SDR (Blog V3 / V4 and RTL2832U sticks)
 
-Press **RTL-SDR** in the header (Chrome or Edge, WebUSB). The page drives the stick itself (a JavaScript port of [rtl-sdr-rs](https://github.com/ccostes/rtl-sdr-rs), MPL-2.0, with the Blog V4 handling: R828D, 28.8 MHz tuner crystal, HF upconverter and band switching, bias tee for an LNA), makes the spectrum and waterfall, and **plays the audio**: NFM, WFM, AM, USB, LSB, CW at the listening point (tap the spectrum). A tracked satellite moves the listening point with its Doppler shift and picks the mode from its downlink.
+Press **RTL-SDR** in the header (Chrome or Edge, WebUSB). The page drives the stick itself (a JavaScript port of [rtl-sdr-rs](https://github.com/ccostes/rtl-sdr-rs), MPL-2.0, with the Blog V4 handling: R828D, 28.8 MHz tuner crystal, HF upconverter and band switching, bias tee for an LNA), makes the spectrum and waterfall, and **plays the audio**: NFM, WFM, AM, USB, LSB, CW at the listening point (tap the spectrum). A tracked satellite moves the listening point with its Doppler shift (gliding at the predicted Doppler rate between the 4-per-second updates, so a CW tone does not step) and picks the mode from its downlink.
+
+- **Decoders** (Settings → Decoders), on the NFM audio of the listening point, ported from the SatHunterSDR app with the same algorithms: **APRS / AX.25** (AFSK1200: discriminator, DPLL, HDLC, CRC with repair of one bad bit; text and a map link for positions; the ISS digipeater on 145.825 MHz, APRS CubeSats) and **SSTV** Robot 36 / PD120 (the ISS SSTV events on 145.800 MHz; the picture builds up line by line, *Save picture* as PNG). Measured in the app's lab with a Spacewalker LNA and an RTL-SDR V3: APRS 90 % of packets at about -122.5 dBm, SSTV clean down to -132 dBm.
+- **Frequency accuracy**: the R820T/R828D PLL fraction is computed in Hz and its remaining error is moved into the RTL2832's IF, as in the app (the original code was off by up to 1 kHz / mixer divider, different at each sample rate).
+- **Screen saver** for OLED screens (Settings → Display): after 1-10 minutes without a touch the screen goes black with a small dim summary (time, frequency, satellite, last decode) that moves every 20 s; reception goes on, a tap wakes it.
 
 - **Windows**: install the driver once with **[SatHunter-RTL-SDR-Driver.exe](https://github.com/z2labs/SatHunter-WEB-SDR/releases/download/driver-1.0/SatHunter-RTL-SDR-Driver.exe)** (one click, instead of Zadig; it is unsigned, so Windows may say *Windows protected your PC*: *More info* → *Run anyway*). Built by `.github/workflows/driver.yml` from libwdi, see `driver/`.
 - **Android, ChromeOS, macOS**: nothing to install.
@@ -42,7 +46,7 @@ Press **RTL-SDR** in the header (Chrome or Edge, WebUSB). The page drives the st
 `index.html` is generated; edit the files in `src/`.
 
 ```
-python tools/build.py              # inline src/flasher.js, src/sat.js, vendor/satellite.js and the firmware
+python tools/build.py              # inline src/flasher.js, src/rtl.js, src/dsp.js, src/decode.js, src/sat.js, vendor/satellite.js and the firmware
 python tools/build.py --check      # CI: index.html must match the sources
 python tools/fetch_data.py         # data/sats.json from SatNOGS and CelesTrak (the Pages workflow runs it daily)
 ```
@@ -54,8 +58,8 @@ Headless Chromium against an emulated ESP32-S3 board, an emulated RTL-SDR (`test
 ```
 pip install playwright && python -m playwright install chromium
 python test/gen.py && node test/run.mjs && node test/md5test.mjs
-node test/rtl.mjs
-python test/live.py && python test/flash.py && python test/reflash.py && python test/features.py && python test/wrongport.py && python test/rack.py && python test/sats.py && python test/rtlweb.py
+node test/rtl.mjs && node test/decode.mjs
+python test/live.py && python test/flash.py && python test/reflash.py && python test/features.py && python test/wrongport.py && python test/rack.py && python test/sats.py && python test/rtlweb.py && python test/decweb.py
 ```
 
 ## Credits and licences

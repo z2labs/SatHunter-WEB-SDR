@@ -311,6 +311,22 @@ body.kind-esp .rtl-only, body.kind-rtl .esp-only { display: none !important; }
   .conn .btn { padding: 0 10px; }
 }
 @media (prefers-reduced-motion: reduce) { .rack, .app { transition: none; } }
+
+/* decoder panel over the waterfall */
+.decpanel { position: absolute; left: 8px; bottom: 8px; z-index: 6; max-width: min(92vw, 560px); background: rgba(8, 12, 16, 0.86);
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: 12px/1.35 ui-monospace, Menlo, Consolas, monospace; color: var(--fg); }
+.decpanel .dechead { display: flex; align-items: center; gap: 8px; color: var(--trace); font-size: 11px; margin-bottom: 3px; }
+.decpanel .dechead span { flex: 1; }
+.decpanel canvas { display: block; width: 240px; image-rendering: pixelated; margin: 3px 0; border-radius: 3px; cursor: zoom-in; }
+.decpanel canvas.big { width: min(86vw, 520px); cursor: zoom-out; }
+.decpanel .declines div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.decpanel .declines .pos { color: var(--ok); }
+.decpanel .declines a { color: var(--ok); }
+/* OLED screen saver */
+.saver { position: fixed; inset: 0; z-index: 100; background: #000; cursor: none; }
+.saverbox { position: absolute; width: 300px; font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; color: rgba(176, 184, 192, 0.42); transition: left 1.5s, top 1.5s; }
+.saverbox .t { font-size: 24px; color: rgba(208, 214, 220, 0.55); }
+.saverhint { position: absolute; right: 10px; bottom: 8px; font: 10px ui-monospace, monospace; color: rgba(176, 184, 192, 0.2); }
 </style>
 </head>
 <body class="kind-esp">
@@ -374,6 +390,11 @@ body.kind-esp .rtl-only, body.kind-rtl .esp-only { display: none !important; }
     <div class="divider" id="divider" role="separator" aria-label="Resize spectrum and waterfall" tabindex="0"></div>
     <div class="wf-wrap" id="wfWrap"><canvas id="wf" aria-label="Waterfall"></canvas><div class="satline" id="satLine" hidden></div></div>
     <button class="racktab" id="rackTab" type="button" hidden aria-controls="rack" title="Show the settings (S)"><svg viewBox="0 0 16 16"><path d="M2 3h8v2H2zm10 0h2v2h-2zM2 7h2v2H2zm4 0h8v2H6zM2 11h6v2H2zm8 0h4v2h-4z"/></svg>Settings</button>
+    <div class="decpanel" id="decPanel" hidden>
+      <div class="dechead"><span id="decTitle">Decoders</span><button class="btn small" id="decSave" type="button" hidden>Save picture</button></div>
+      <canvas id="sstvCv" width="320" height="240" hidden title="Tap: bigger / smaller"></canvas>
+      <div class="declines" id="decLines"></div>
+    </div>
     <div class="toast" id="toast" role="status" hidden></div>
     <div class="card" id="portCard" role="alertdialog" aria-labelledby="portCardTitle" hidden>
       <h3 id="portCardTitle">This is the board's UART port</h3>
@@ -382,6 +403,7 @@ body.kind-esp .rtl-only, body.kind-rtl .esp-only { display: none !important; }
     </div>
   </main>
   <div class="scrim" id="scrim" hidden></div>
+  <div class="saver" id="saver" hidden><div class="saverbox" id="saverBox"></div><div class="saverhint">tap to wake</div></div>
 
   <aside class="rack" id="rack">
     <span class="rack-grip"></span>
@@ -446,6 +468,13 @@ body.kind-esp .rtl-only, body.kind-rtl .esp-only { display: none !important; }
       <p class="note">Tap the spectrum or the waterfall where you want to listen. A tracked satellite moves the listening point with its Doppler shift.</p>
     </section>
 
+    <section class="sect rtl-only" id="decSect">
+      <h2>Decoders <span class="note" id="decState"></span></h2>
+      <label class="check"><input type="checkbox" id="decAprs"> APRS / AX.25 packets (AFSK1200, NFM)</label>
+      <label class="check"><input type="checkbox" id="decSstv"> SSTV pictures (Robot 36, PD120, NFM)</label>
+      <p class="note">On the audio of the listening point, the same decoders as in the SatHunterSDR app: APRS from the ISS digipeater (145.825 MHz) and APRS CubeSats, SSTV from the ISS events (145.800 MHz).</p>
+    </section>
+
     <section class="sect">
       <h2>Display</h2>
       <div class="row"><span class="lbl">Zoom</span>
@@ -467,6 +496,9 @@ body.kind-esp .rtl-only, body.kind-rtl .esp-only { display: none !important; }
       </div>
       <div class="marker-read" id="markerRead"></div>
       <label class="check"><input type="checkbox" id="keepAwake"> Keep the screen on</label>
+      <div class="row"><label for="saverIn">Screen saver</label>
+        <select class="grow" id="saverIn"><option value="0">Off</option><option value="1">after 1 min</option><option value="2">after 2 min</option><option value="5">after 5 min</option><option value="10">after 10 min</option></select></div>
+      <p class="note">Protects an OLED screen during long passes: black, with a small dim summary that moves around. Reception goes on; tap to wake.</p>
     </section>
 
     <section class="sect" id="exportSect">
@@ -894,13 +926,16 @@ class DemoSource {
 // @@dsp-begin
 // @@dsp-end
 
+// @@decode-begin
+// @@decode-end
+
 // @@sat-begin
 // @@sat-end
 
 // ---------------------------------------------------------------- state + persistence
 const DEFAULTS = { freqHz: 2245e6, span: 80e6, bins: 2048, gain: 60, maxHold: false, dcFix: true, ppm: 0,
   step: 1e6, zoom: 1, autoRange: true, dbMin: -85, dbMax: -20, avg: 0.3, wfRate: 310, palette: "classic", peakHold: false, split: 0.38,
-  autoConnect: true, keepAwake: true, playing: true, expMode: "snap", expN: 50, expSpan: "full", logIv: 1, rackPinned: false,
+  autoConnect: true, keepAwake: true, saverMin: 2, decAprs: false, decSstv: false, playing: true, expMode: "snap", expN: 50, expSpan: "full", logIv: 1, rackPinned: false,
   rtlMode: "NFM", vol: 1, muted: false, rtlBias: false, vfoHz: null, kinds: {},
   satBand: "esp", satSort: "pass", satSearch: "", satSel: null, satTx: 0, satTrack: false, favs: [], loc: null };
 const WF_ALL = 310;   // waterfall rate slider end stop: one row per spectrum, like the desktop app
@@ -913,6 +948,16 @@ function vfoHz() {
   const h = state.span * 0.48;
   if (state.vfoHz == null || state.vfoHz < state.freqHz - h || state.vfoHz > state.freqHz + h) state.vfoHz = state.freqHz;
   return state.vfoHz;
+}
+// The demodulator's VFO: the listening point, or while tracking the satellite's frequency
+// extrapolated at its Doppler rate (smooth between the 250 ms tracking updates)
+function audioVfo() {
+  const g = typeof sat !== "undefined" ? sat.glide : null;
+  if (g && state.satTrack) {
+    const dt = Math.min(1, performance.now() / 1000 - g.t);
+    return g.f + g.rate * dt;
+  }
+  return vfoHz();
 }
 function setVfo(f) { state.vfoHz = Math.round(f / 10) * 10; viewDirty = true; save(); updateAudioUi(); }
 
@@ -1751,7 +1796,7 @@ function stopLog() {
 }
 
 // ---------------------------------------------------------------- debug report
-const PAGE_VERSION = "0.5.0";
+const PAGE_VERSION = "0.6.0";
 window.addEventListener("error", (e) => log("[JS] " + e.message + " @ " + (e.filename || "").split("/").pop() + ":" + e.lineno));
 window.addEventListener("unhandledrejection", (e) => log("[JS] unhandled: " + ((e.reason && e.reason.message) || e.reason)));
 function exportDebug() {
@@ -1793,7 +1838,8 @@ const hooks = {
   onStatus: (k, t) => { setStatus(k, t); if (k === "err" && mode === "serial") { mode = "none"; $("connectLabel").textContent = "Connect"; } },
   log,
   onInfo: (src) => { $("fwInfo").textContent = (mode === "rtl" || src instanceof RtlSource ? "" : "Firmware ") + src.fwInfo; },
-  audioCfg: () => ({ on: state.playing, mode: state.rtlMode || "NFM", vfo: vfoHz() })
+  audioCfg: () => ({ on: state.playing, mode: state.rtlMode || "NFM", vfo: audioVfo() }),
+  onAudio: (au, rate, md) => decFeed(au, rate, md)
 };
 function updateAudioUi() {
   const el = $("audioState"); if (!el) return;
@@ -1976,7 +2022,114 @@ bindPlot(specCv, true); bindPlot(wfCv, false); bindDivider();
 new ResizeObserver(resize).observe($("view"));
 resize();
 if (!SerialSource.supported()) $("srcNote").innerHTML = "This browser has no USB serial access, so the page runs on demo data. For a live board use <b>Chrome</b> or <b>Edge</b> on a computer.";
-updateFwUi(); setPlayUi(); syncWakeLock(); initRackAutoHide(); initSats();
+
+// ---------------------------------------------------------------- decoders (APRS, SSTV) on the audio
+const dec = { aprs: null, sstv: null, rate: 0, aprsSeen: 0, sstvKey: "", sstvBig: false };
+function decFeed(au, rate, md) {
+  if (md !== "NFM" || (!state.decAprs && !state.decSstv)) return;
+  if (dec.rate !== rate) { dec.rate = rate; dec.aprs = null; dec.sstv = null; }
+  if (state.decAprs) (dec.aprs = dec.aprs || new AfskDecoder(rate)).process(au);
+  if (state.decSstv) (dec.sstv = dec.sstv || new SstvDecoder(rate)).process(au);
+}
+function decPicture() {
+  const d = dec.sstv; if (!d) return null;
+  return d.cur || d.done[d.done.length - 1] || null;
+}
+function decUi() {
+  const on = mode === "rtl" && (state.decAprs || state.decSstv);
+  const panel = $("decPanel"); panel.hidden = !on;
+  const nfm = (state.rtlMode || "NFM") === "NFM";
+  $("decState").textContent = !on ? "" : nfm ? "" : "(switch to NFM)";
+  if (!on) return;
+  const parts = [];
+  // SSTV
+  const pic = state.decSstv ? decPicture() : null, cv = $("sstvCv");
+  cv.hidden = !pic; $("decSave").hidden = !pic;
+  if (state.decSstv) parts.push(pic ? `SSTV ${pic.mode} ${pic.rows}/${pic.h}` + (dec.sstv.cur ? "" : " ✓") : "SSTV: waiting for a VIS header");
+  if (pic) {
+    const key = pic.started + "/" + pic.rows;
+    if (key !== dec.sstvKey) {
+      dec.sstvKey = key;
+      if (cv.width !== pic.w || cv.height !== pic.h) { cv.width = pic.w; cv.height = pic.h; }
+      cv.getContext("2d").putImageData(new ImageData(pic.rgb, pic.w, pic.h), 0, 0);
+    }
+  }
+  // APRS
+  const a = dec.aprs;
+  if (state.decAprs) parts.push(`APRS ${a ? a.count : 0}` + (a && a.badCrc ? `, ${a.badCrc} bad CRC` : "") + (a && a.fixed ? `, ${a.fixed} repaired` : ""));
+  $("decTitle").textContent = parts.join(" · ") + (nfm ? "" : " · NFM needed");
+  if (a && a.count !== dec.aprsSeen) {
+    dec.aprsSeen = a.count;
+    $("decLines").innerHTML = a.frames.slice(-5).map((f) => {
+      const via = f.path.length ? " via " + esc(f.path.join(",")) : "";
+      const pos = f.pos ? `<div class="pos">⌖ <a href="https://www.openstreetmap.org/?mlat=${f.pos[0].toFixed(5)}&mlon=${f.pos[1].toFixed(5)}#map=10/${f.pos[0].toFixed(4)}/${f.pos[1].toFixed(4)}" target="_blank" rel="noopener">${f.pos[0].toFixed(4)} ${f.pos[1].toFixed(4)}</a> ${esc(f.src)}</div>` : "";
+      return `<div title="${esc(f.tnc2)}">${esc(f.src)} &gt; ${esc(f.dst)}${via}: ${esc(f.info)}</div>` + pos;
+    }).join("");
+  }
+  if (!state.decAprs) $("decLines").innerHTML = "";
+}
+function initDecoders() {
+  for (const [id, key] of [["decAprs", "decAprs"], ["decSstv", "decSstv"]]) {
+    $(id).checked = !!state[key];
+    $(id).addEventListener("change", () => {
+      state[key] = $(id).checked; save();
+      if (state[key] && (state.rtlMode || "NFM") !== "NFM") toast("The decoders work on NFM audio");
+      decUi();
+    });
+  }
+  $("sstvCv").addEventListener("click", () => { dec.sstvBig = !dec.sstvBig; $("sstvCv").classList.toggle("big", dec.sstvBig); });
+  $("decSave").addEventListener("click", () => {
+    const pic = decPicture(); if (!pic) return;
+    const a = document.createElement("a");
+    a.download = "sstv-" + pic.mode.replace(/\s/g, "").toLowerCase() + "-" + new Date(pic.started).toISOString().replace(/[:.]/g, "-").slice(0, 19) + ".png";
+    a.href = $("sstvCv").toDataURL("image/png"); a.click();
+  });
+  setInterval(decUi, 500);
+}
+
+// ---------------------------------------------------------------- OLED screen saver
+const saver = { last: Date.now(), on: false, moved: 0 };
+function saverWake() {
+  saver.last = Date.now();
+  if (saver.on) { saver.on = false; $("saver").hidden = true; }
+}
+function saverTick() {
+  const min = Number(state.saverMin) || 0;
+  if (!saver.on && min > 0 && Date.now() - saver.last > min * 60000 && document.visibilityState === "visible") {
+    saver.on = true; $("saver").hidden = false; saver.moved = 0;
+  }
+  if (!saver.on) return;
+  const box = $("saverBox"), now = new Date();
+  const lines = [`<div class="t">${now.toTimeString().slice(0, 8)}</div>`];
+  if (mode === "rtl") lines.push(`${(audioVfo() / 1e6).toFixed(4)} MHz ${esc(state.rtlMode || "NFM")}` + (state.playing ? "" : " (stopped)"));
+  else if (mode === "serial") lines.push(`ESP32-S3 spectrum ${(state.freqHz / 1e6).toFixed(1)} MHz`);
+  else lines.push("no receiver connected");
+  const s = typeof satSel === "function" ? satSel() : null;
+  if (s && sat.live) {
+    const l = sat.live.look;
+    lines.push(esc(s.name) + (l ? ` el ${l.el.toFixed(0)}°` : "") + (state.satTrack ? ` Doppler ${(sat.live.dop >= 0 ? "+" : "") + Math.round(sat.live.dop)} Hz` : ""));
+  }
+  const pic = state.decSstv ? decPicture() : null;
+  if (pic) lines.push(`SSTV ${esc(pic.mode)} ${pic.rows}/${pic.h}`);
+  const a = state.decAprs ? dec.aprs : null;
+  if (a && a.frames.length) lines.push(`APRS ${a.count}: ${esc(a.frames[a.frames.length - 1].tnc2).slice(0, 60)}`);
+  box.innerHTML = lines.join("<br>");
+  // move every 20 s so no pixel stays lit
+  if (Date.now() - saver.moved > 20000) {
+    saver.moved = Date.now();
+    box.style.left = Math.round(Math.random() * Math.max(0, innerWidth - 310)) + "px";
+    box.style.top = Math.round(Math.random() * Math.max(0, innerHeight - 140)) + "px";
+  }
+}
+function initSaver() {
+  $("saverIn").value = String(state.saverMin ?? 2);
+  $("saverIn").addEventListener("change", () => { state.saverMin = Number($("saverIn").value); save(); saverWake(); });
+  for (const ev of ["pointerdown", "keydown", "wheel", "touchstart"]) document.addEventListener(ev, saverWake, { capture: true, passive: true });
+  $("saver").addEventListener("pointerdown", (e) => { e.stopPropagation(); e.preventDefault(); saverWake(); });
+  setInterval(saverTick, 1000);
+}
+
+updateFwUi(); setPlayUi(); syncWakeLock(); initRackAutoHide(); initSats(); initDecoders(); initSaver();
 if (state.freqHz < FMIN || state.freqHz > FMAX) {
   const old = state.freqHz; state.freqHz = Math.max(FMIN, Math.min(FMAX, state.freqHz)); renderDigits(); save();
   toast("The saved frequency " + (old / 1e6).toFixed(3) + " MHz is outside the ESP32-S3's range. Moved to " + (state.freqHz / 1e6).toFixed(0) + " MHz.");

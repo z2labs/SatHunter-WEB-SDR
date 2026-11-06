@@ -268,7 +268,11 @@ class RtlSource {
     if (a && a.on) {
       if (!this.demod || this.demod.mode !== a.mode || this.demod.fs !== fs || this.demod.bw !== (a.bw || MODES[a.mode].bw)) this.demod = new Demod(fs, a.mode, a.bw);
       const off = a.vfo - c.freqHz;
-      if (Math.abs(off) < fs / 2) audioOut.push(this.demod.process(u8, off), this.demod.ar);
+      if (Math.abs(off) < fs / 2) {
+        const au = this.demod.process(u8, off);
+        audioOut.push(au, this.demod.ar);
+        if (this.h.onAudio) this.h.onAudio(au, this.demod.ar, a.mode); // decoders
+      }
     }
   }
   async close() {

@@ -15,6 +15,7 @@ const sat = {
   queue: [], working: false,
   shift: 0,            // seconds added to the clock (simulated pass)
   live: null,          // selected satellite now: {look, f, doppler}
+  glide: null,         // tracking: {f, rate (Hz/s), t (s)}: the audio VFO between updates
   compass: { mode: "off", heading: null, last: 0, perm: false },
 };
 const satNow = () => Date.now() / 1000 + sat.shift;
@@ -280,7 +281,15 @@ function updateSatLive() {
       // RTL-SDR: keep the satellite a little off the centre (away from the DC spike)
       setFreq(Math.round((sat.live.f - (mode === "rtl" ? state.span * 0.15 : 0)) / 1e4) * 1e4, "track");
     }
-    if (mode === "rtl") setVfo(sat.live.f);     // listen where the satellite is now
+    if (mode === "rtl") {
+      // listen where the satellite is now, and glide at its Doppler rate (from the look 1 s
+      // ahead) between these 250 ms updates: no steps in a CW tone at 100+ Hz/s
+      const l1 = lookAt(s, now + 1, station());
+      sat.glide = { f: sat.live.f, rate: l1 ? -f0 * l1.rr / C_KMS - dop : 0, t: performance.now() / 1000 };
+      setVfo(sat.live.f);
+    }
+  } else {
+    sat.glide = null;
   }
   viewDirty = true;
 }

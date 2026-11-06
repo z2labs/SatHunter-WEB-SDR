@@ -1,4 +1,4 @@
-"""Build index.html from src/: inline src/flasher.js, src/sat.js and vendor/satellite.js (SGP4, MIT),
+"""Build index.html from src/: inline src/flasher.js, src/rtl.js, src/dsp.js, src/decode.js, src/sat.js and vendor/satellite.js (SGP4, MIT),
 and embed the firmware bundle (gzip + base64).
 
 Usage:
@@ -18,7 +18,7 @@ fw_dir = args_[0] if args_ else os.path.join(root, "fw")
 html = open(os.path.join(root, "src", "index.html"), encoding="utf-8").read()
 flasher = open(os.path.join(root, "src", "flasher.js"), encoding="utf-8").read()
 html = re.sub(r"(// @@flasher-begin\n).*?(// @@flasher-end)", lambda m: m.group(1) + flasher + m.group(2), html, flags=re.S)
-for part in ("rtl", "dsp"):
+for part in ("rtl", "dsp", "decode"):
     code = open(os.path.join(root, "src", part + ".js"), encoding="utf-8").read()
     html = re.sub(r"(// @@" + part + r"-begin\n).*?(// @@" + part + r"-end)", lambda m: m.group(1) + code + m.group(2), html, flags=re.S)
 sat_js = open(os.path.join(root, "src", "sat.js"), encoding="utf-8").read()
