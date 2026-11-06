@@ -164,7 +164,16 @@ const RtlSdrUsb = (() => {
       const d = await this.readArray(BLOCK_IIC, i2cAddr, 1);
       return d[0];
     }
-    i2cWrite(i2cAddr, buf) { return this.writeArray(BLOCK_IIC, i2cAddr, buf); }
+    // the tuner now and then NACKs a transfer (the RTL2832 answers STALL); the next try works
+    async i2cWrite(i2cAddr, buf) {
+      for (let tries = 0; ; tries++) {
+        try { return await this.writeArray(BLOCK_IIC, i2cAddr, buf); }
+        catch (e) {
+          if (tries >= 3 || !/stall/i.test(e.message || "")) throw e;
+          await new Promise((r) => setTimeout(r, 2 + 3 * tries));
+        }
+      }
+    }
     i2cRead(i2cAddr, len) { return this.readArray(BLOCK_IIC, i2cAddr, len); }
 
     async readEeprom(offset, len) {
@@ -216,7 +225,8 @@ const RtlSdrUsb = (() => {
         const buf = new Uint8Array(size + 1);
         buf[0] = reg + pos;
         for (let k = 0; k < size; k++) buf[1 + k] = vals[pos + k] & 0xff;
-        await this.io.i2cWrite(this.i2cAddr, buf);
+        try { await this.io.i2cWrite(this.i2cAddr, buf); }
+        catch (e) { throw new Error(`R82xx: write of register ${hex(reg + pos)} (${size} bytes) failed: ${e.message || e}`); }
         pos += size;
       }
     }

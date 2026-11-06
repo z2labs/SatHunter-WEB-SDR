@@ -125,6 +125,8 @@
         const { value, index } = setup;
         state.log.push({ dir: "out", value, index, data: Array.from(d) });
         if ((index & 0x10) === 0) throw new Error("mock: write without the 0x10 write flag");
+        // opts.i2cNackEvery: every Nth tuner register write is NACKed (the chip answers STALL)
+        if (o.i2cNackEvery && (index >> 8) === 6 && d.length > 1 && (state.i2cWrites = (state.i2cWrites || 0) + 1) % o.i2cNackEvery === 0) { state.nacks = (state.nacks || 0) + 1; return { status: "stall", bytesWritten: 0 }; }
         const block = index >> 8;
         if (o.failTestWrite && state.log.length === 1) return { status: "stall", bytesWritten: 0 };
         if (block === 0) { // demod: value = (addr << 8) | 0x20, index = 0x10 | page

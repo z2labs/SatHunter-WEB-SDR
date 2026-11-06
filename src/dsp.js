@@ -203,19 +203,23 @@ class RtlSource {
       if (this.dirty && !this.busy) {
         this.busy = true; this.dirty = false;
         const s = this.want, c = this.cur, r = this.rtl;
-        try {
-          if (s.span !== c.span) { await r.setSampleRate(s.span); c.span = s.span; this.fft = null; this.demod = null; }
-          if (s.freqHz !== c.freqHz) { await r.setCenterFreq(s.freqHz); c.freqHz = s.freqHz; this.toSkip = Math.round(s.span * 0.004); }
-          const g = s.gain < 0 || s.gain == null ? null : this.gains[Math.min(this.gains.length - 1, s.gain)];
-          if (g !== c.gainDb || c.gain === undefined) { await r.setGain(g); c.gainDb = g; c.gain = s.gain; }
-          if (s.ppm !== c.ppm) { await r.setPpm(s.ppm || 0); c.ppm = s.ppm; }
-          if (!!s.bias !== c.bias) { await r.setBiasTee(!!s.bias); c.bias = !!s.bias; }
-          if (s.bins !== c.bins) { c.bins = s.bins; this.fft = null; }
-          if (!c.started) { await r.resetBuffer(); c.started = true; }
-          if (!this.paused) this.h.onStatus("live", "Live");
-          $("tuneInfo").textContent = "RTL-SDR " + (c.span / 1e6).toFixed(3) + " MS/s, " + c.bins + " bins, gain " + (g == null ? "auto" : g.toFixed(1) + " dB") + (c.bias ? ", bias tee on" : "");
-        } catch (e) { this.h.log("rtl: " + e.message); }
+        // each setting on its own: one that fails (a tuner I2C NACK) is logged and retried on the
+        // next change, and never keeps the stream from starting
+        let failed = 0;
+        const step = async (name, fn) => { try { await fn(); return true; } catch (e) { failed++; this.h.log("rtl: " + name + ": " + e.message); return false; } };
+        if (s.span !== c.span && await step("sample rate", () => r.setSampleRate(s.span))) { c.span = s.span; this.fft = null; this.demod = null; }
+        if (s.freqHz !== c.freqHz && await step("tune " + (s.freqHz / 1e6).toFixed(3) + " MHz", () => r.setCenterFreq(s.freqHz))) { c.freqHz = s.freqHz; this.toSkip = Math.round(s.span * 0.004); }
+        const g = s.gain < 0 || s.gain == null ? null : this.gains[Math.min(this.gains.length - 1, s.gain)];
+        if ((g !== c.gainDb || c.gain === undefined) && await step("gain", () => r.setGain(g))) { c.gainDb = g; c.gain = s.gain; }
+        if (s.ppm !== c.ppm && await step("ppm", () => r.setPpm(s.ppm || 0))) c.ppm = s.ppm;
+        if (!!s.bias !== c.bias && await step("bias tee", () => r.setBiasTee(!!s.bias))) c.bias = !!s.bias;
+        if (s.bins !== c.bins) { c.bins = s.bins; this.fft = null; }
+        if (!c.started && await step("start", () => r.resetBuffer())) c.started = true;
+        if (!this.paused) this.h.onStatus("live", "Live");
+        $("tuneInfo").textContent = "RTL-SDR " + (c.span / 1e6).toFixed(3) + " MS/s, " + c.bins + " bins, gain " + (g == null ? "auto" : g.toFixed(1) + " dB") + (c.bias ? ", bias tee on" : "");
         this.busy = false;
+        if (failed) { this.retries = (this.retries || 0) + 1; if (this.retries <= 20) { await sleep(500); this.dirty = true; } }
+        else this.retries = 0;
       }
       await sleep(30);
     }
