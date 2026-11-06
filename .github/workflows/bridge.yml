@@ -149,7 +149,8 @@ jobs:
           path: out/*
 
   release:
-    if: ${{ inputs.release_tag != '' }}
+    # macOS runners may be unavailable to the organisation: publish without the zip then
+    if: ${{ always() && inputs.release_tag != '' && needs.linux.result == 'success' && needs.windows.result == 'success' }}
     needs: [linux, macos, windows]
     runs-on: ubuntu-latest
     steps:

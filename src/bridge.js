@@ -13,7 +13,7 @@ const SatBridge = (() => {
     linux: RELEASE + "sathunter-bridge_1.0.0_amd64.deb",
     linuxArm: RELEASE + "sathunter-bridge_1.0.0_arm64.deb",
     windows: RELEASE + "SatHunter-Setup.exe",
-    mac: RELEASE + "sathunter-bridge-macos.zip",
+    mac: "https://github.com/z2labs/SatHunter-WEB-SDR/releases/tag/bridge-1.0",
     all: "https://github.com/z2labs/SatHunter-WEB-SDR/releases/tag/bridge-1.0",
   };
 

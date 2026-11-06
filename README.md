@@ -28,7 +28,7 @@ Press **RTL-SDR** in the header (Chrome or Edge over WebUSB, any browser through
 
 - **Windows**: run **[SatHunter-Setup.exe](https://github.com/z2labs/SatHunter-WEB-SDR/releases/download/bridge-1.0/SatHunter-Setup.exe)** once: the RTL-SDR driver (one click, instead of Zadig) and SatHunter Bridge (for Firefox). It is unsigned, so Windows may say *Windows protected your PC*: *More info* → *Run anyway*. The driver alone is still [SatHunter-RTL-SDR-Driver.exe](https://github.com/z2labs/SatHunter-WEB-SDR/releases/download/driver-1.0/SatHunter-RTL-SDR-Driver.exe) (`driver/`).
 - **Linux**: install **SatHunter Bridge** once: [the .deb for PCs](https://github.com/z2labs/SatHunter-WEB-SDR/releases/download/bridge-1.0/sathunter-bridge_1.0.0_amd64.deb) or [for a Raspberry Pi](https://github.com/z2labs/SatHunter-WEB-SDR/releases/download/bridge-1.0/sathunter-bridge_1.0.0_arm64.deb) (double-click), or the [tar.gz](https://github.com/z2labs/SatHunter-WEB-SDR/releases/tag/bridge-1.0) and `sudo ./install.sh` on other distributions. Nothing to type: it keeps the TV driver off the stick and lets every browser in. The page offers the right download when it needs it.
-- **Firefox** (any computer): SatHunter Bridge as above (macOS: [the zip](https://github.com/z2labs/SatHunter-WEB-SDR/releases/download/bridge-1.0/sathunter-bridge-macos.zip)).
+- **Firefox** (any computer): SatHunter Bridge as above (macOS: the zip on [the release page](https://github.com/z2labs/SatHunter-WEB-SDR/releases/tag/bridge-1.0)).
 - **Android, ChromeOS, macOS** in Chrome: nothing to install.
 
 ## Use
