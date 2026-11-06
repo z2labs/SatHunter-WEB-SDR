@@ -229,7 +229,7 @@ class SstvDecoder {
   }
   start(m) {
     if (this.cur && this.cur.rows * 2 >= this.cur.h) this.finish();
-    this.mode = m; this.period = 0; this.periodSamples = m.period * this.fs; this.nextSync = this.n;
+    this.mode = m; this.period = 0; this.missed = 0; this.periodSamples = m.period * this.fs; this.nextSync = this.n;
     this.chromaPrev = new Uint8Array(m.w).fill(128); this.yPrev = new Uint8Array(m.w);
     this.cur = { mode: m.name, w: m.w, h: m.h, rgb: new Uint8ClampedArray(m.w * m.h * 4), rows: 0, syncs: 0, started: Date.now() };
     for (let k = 3; k < this.cur.rgb.length; k += 4) this.cur.rgb[k] = 255;
@@ -249,13 +249,16 @@ class SstvDecoder {
     // the sync: within +-8 ms of the prediction, the window of sync length with the lowest mean
     const syncLen = m.sync * fs, step = Math.max(1, fs / 4000);
     let best = Infinity, bt = this.nextSync;
-    for (let t = this.nextSync - 0.008 * fs; t <= this.nextSync + 0.008 * fs; t += step) {
+    // after 3 periods without a sync the lock is lost: search the whole period once
+    const reach = this.missed >= 3 ? 0.45 * this.periodSamples : 0.008 * fs;
+    for (let t = this.nextSync - reach; t <= this.nextSync + reach; t += step) {
       const v = this.mean(t, syncLen); if (v != null && v < best) { best = v; bt = t; }
     }
-    const found = Math.abs(best - SSTV_SYNC) < 120, err = bt - this.nextSync;
+    const found = Math.abs(best - SSTV_SYNC) < 120, err = bt - this.nextSync, relock = found && this.missed >= 3;
+    this.missed = found ? 0 : this.missed + 1;
     let t0 = this.nextSync;
     if (found) {
-      if (this.period < 4) t0 += 0.7 * err;
+      if (this.period < 4 || relock) t0 += 0.7 * err;
       else { this.periodSamples += 0.01 * err; t0 += 0.1 * err; }
     }
     const w = m.w, rows = [];
