@@ -175,7 +175,9 @@ class AudioOut {
 const audioOut = new AudioOut();
 
 // ---------------------------------------------------------------- RTL-SDR source (WebUSB): IQ in, spectrum rows and audio out
-const RTL_BLOCK = 131072, RTL_INFLIGHT = 4, RTL_FPS = 90, RTL_AVG = 2;
+// 15 reads of 128 kB in flight (as librtlsdr): ~400 ms at 2.4 MS/s before the stick's FIFO
+// overflows while the browser is busy (Firefox, slow laptops); with 4 samples were lost
+const RTL_BLOCK = 131072, RTL_INFLIGHT = 15, RTL_FPS = 90, RTL_AVG = 2;
 class RtlSource {
   constructor(hooks) {
     this.h = hooks; this.dev = null; this.rtl = null; this.open = false; this.paused = false;
@@ -224,7 +226,7 @@ class RtlSource {
         if (s.ppm !== c.ppm && await step("ppm", () => r.setPpm(s.ppm || 0))) c.ppm = s.ppm;
         if (!!s.bias !== c.bias && await step("bias tee", () => r.setBiasTee(!!s.bias))) c.bias = !!s.bias;
         if (s.bins !== c.bins) { c.bins = s.bins; this.fft = null; }
-        if (!c.started && await step("start", () => r.resetBuffer())) c.started = true;
+        if (!c.started && await step("start", () => r.resetBuffer())) { c.started = true; this.stats.t0 = performance.now(); this.stats.b0 = this.stats.bytes; }
         if (!this.paused) this.h.onStatus("live", "Live");
         $("tuneInfo").textContent = "RTL-SDR " + (c.span / 1e6).toFixed(3) + " MS/s, " + c.bins + " bins, gain " + (g == null ? "auto" : g.toFixed(1) + " dB") + (c.bias ? ", bias tee on" : "");
         this.busy = false;
@@ -247,7 +249,8 @@ class RtlSource {
         try { u8 = await q.shift(); stalls = 0; }
         catch (e) {
           // a stall (FIFO overflow, a reset racing the reads): drain, reset the FIFO, go on
-          if (!/stall/i.test((e && e.message) || "") || ++stalls > 5 || !this.open) throw e;
+          // (also a babble / protocol error: an overflowing FIFO on Linux)
+          if (!/stall|protocol|hardware fault|overflow/i.test((e && e.message) || "") || ++stalls > 5 || !this.open) throw e;
           for (const p of q.splice(0)) { try { await p; } catch (x) {} }
           this.h.log("rtl: bulk read stalled, restarting the stream");
           await sleep(20);

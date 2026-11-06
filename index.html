@@ -568,7 +568,7 @@ const KINDS = {
   esp: { min: 2204e6, max: 2804e6, spans: [16e6, 40e6, 80e6], unit: "MHz", lab: (v) => String(v / 1e6), name: "ESP32-S3",
          defaults: { freqHz: 2245e6, span: 80e6, bins: 2048, gain: 60, zoom: 1 } },
   rtl: { min: 24e6, max: 1766e6, spans: [2.4e6, 2.048e6, 1.024e6, 0.25e6], unit: "MS/s", lab: (v) => String(+(v / 1e6).toFixed(3)), name: "RTL-SDR",
-         defaults: { freqHz: 145.8e6, span: 2.4e6, bins: 2048, gain: -1, zoom: 1 } },
+         defaults: { freqHz: 94.8e6, span: 2.4e6, bins: 2048, gain: -1, zoom: 1 } },   // a strong FM station: sound right away
 };
 let curKind = "esp";
 const RTL_DRIVER_URL = "https://github.com/z2labs/SatHunter-WEB-SDR/releases/download/driver-1.0/SatHunter-RTL-SDR-Driver.exe";
@@ -2535,7 +2535,9 @@ class AudioOut {
 const audioOut = new AudioOut();
 
 // ---------------------------------------------------------------- RTL-SDR source (WebUSB): IQ in, spectrum rows and audio out
-const RTL_BLOCK = 131072, RTL_INFLIGHT = 4, RTL_FPS = 90, RTL_AVG = 2;
+// 15 reads of 128 kB in flight (as librtlsdr): ~400 ms at 2.4 MS/s before the stick's FIFO
+// overflows while the browser is busy (Firefox, slow laptops); with 4 samples were lost
+const RTL_BLOCK = 131072, RTL_INFLIGHT = 15, RTL_FPS = 90, RTL_AVG = 2;
 class RtlSource {
   constructor(hooks) {
     this.h = hooks; this.dev = null; this.rtl = null; this.open = false; this.paused = false;
@@ -2584,7 +2586,7 @@ class RtlSource {
         if (s.ppm !== c.ppm && await step("ppm", () => r.setPpm(s.ppm || 0))) c.ppm = s.ppm;
         if (!!s.bias !== c.bias && await step("bias tee", () => r.setBiasTee(!!s.bias))) c.bias = !!s.bias;
         if (s.bins !== c.bins) { c.bins = s.bins; this.fft = null; }
-        if (!c.started && await step("start", () => r.resetBuffer())) c.started = true;
+        if (!c.started && await step("start", () => r.resetBuffer())) { c.started = true; this.stats.t0 = performance.now(); this.stats.b0 = this.stats.bytes; }
         if (!this.paused) this.h.onStatus("live", "Live");
         $("tuneInfo").textContent = "RTL-SDR " + (c.span / 1e6).toFixed(3) + " MS/s, " + c.bins + " bins, gain " + (g == null ? "auto" : g.toFixed(1) + " dB") + (c.bias ? ", bias tee on" : "");
         this.busy = false;
@@ -2607,7 +2609,8 @@ class RtlSource {
         try { u8 = await q.shift(); stalls = 0; }
         catch (e) {
           // a stall (FIFO overflow, a reset racing the reads): drain, reset the FIFO, go on
-          if (!/stall/i.test((e && e.message) || "") || ++stalls > 5 || !this.open) throw e;
+          // (also a babble / protocol error: an overflowing FIFO on Linux)
+          if (!/stall|protocol|hardware fault|overflow/i.test((e && e.message) || "") || ++stalls > 5 || !this.open) throw e;
           for (const p of q.splice(0)) { try { await p; } catch (x) {} }
           this.h.log("rtl: bulk read stalled, restarting the stream");
           await sleep(20);
@@ -3564,7 +3567,7 @@ function setSats(open) {
 const DEFAULTS = { freqHz: 2245e6, span: 80e6, bins: 2048, gain: 60, maxHold: false, dcFix: true, ppm: 0,
   step: 1e6, zoom: 1, autoRange: true, dbMin: -85, dbMax: -20, avg: 0.3, wfRate: 310, palette: "classic", peakHold: false, split: 0.38,
   autoConnect: true, keepAwake: true, saverMin: 2, decAprs: false, decSstv: false, playing: true, expMode: "snap", expN: 50, expSpan: "full", logIv: 1, rackPinned: false,
-  rtlMode: "NFM", vol: 1, muted: false, rtlBias: false, vfoHz: null, kinds: {},
+  rtlMode: "WFM", vol: 1, muted: false, rtlBias: false, vfoHz: null, kinds: {},
   satBand: "esp", satSort: "pass", satSearch: "", satSel: null, satTx: 0, satTrack: false, favs: [], loc: null };
 const WF_ALL = 310;   // waterfall rate slider end stop: one row per spectrum, like the desktop app
 const state = { ...DEFAULTS };
@@ -4443,6 +4446,7 @@ function exportDebug() {
     "mode: " + mode + ", port: " + portInfo + ", firmware: " + (source && source.fwInfo ? source.fwInfo : "-") + (source && source.fwBuild ? " (" + source.fwBuild + ")" : ""),
     "caps: " + (source && source.caps ? source.caps.trim() : "-"),
     "stats: " + JSON.stringify({ frames: st.frames, lost: st.lost, crc: st.crc, bytes: st.bytes, restarts: st.restarts }),
+    (mode === "rtl" && st.t0 && source.cur && source.cur.span ? "iq: " + ((st.bytes - st.b0) / ((performance.now() - st.t0) / 1000) / 1e6).toFixed(2) + " MB/s of " + (source.cur.span * 2 / 1e6).toFixed(2) + " MB/s (less = samples lost in the stick)\n" : "") +
     "audio: " + (audioOut.ctx ? audioOut.ctx.state + ", " + audioOut.ctx.sampleRate + " Hz, dropouts " + audioOut.under + ", lead " + Math.round(audioOut.lead * 1000) + " ms" : "off"),
     "", "settings:", JSON.stringify(state, null, 1), "", "log:", ...logLines
   ];

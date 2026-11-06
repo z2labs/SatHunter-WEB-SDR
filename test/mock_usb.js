@@ -172,7 +172,12 @@
         if (blockGet(1, 0x2148) & 0x1000) { state.stalls = (state.stalls || 0) + 1; return { status: "stall" }; }
         const fs = sampleRate() || 2.4e6;
         // in a browser, deliver at the real sample rate like a stick does (Node tests run unpaced)
-        if (typeof window !== "undefined") await new Promise((r) => setTimeout(r, (length / 2 / fs) * 1000));
+        // (one stream clock: reads in flight share it, as on a real stick)
+        if (typeof window !== "undefined") {
+          const now = performance.now();
+          state.tNext = Math.max(state.tNext || 0, now) + (length / 2 / fs) * 1000;
+          await new Promise((r) => setTimeout(r, state.tNext - now));
+        }
         const w = (2 * Math.PI * o.carrierOffsetHz) / fs;
         const out = new Uint8Array(length);
         const clip = (x) => (x < 0 ? 0 : x > 255 ? 255 : Math.round(x));
