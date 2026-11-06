@@ -16,6 +16,8 @@ const gauss = () => Math.sqrt(-2 * Math.log(rnd())) * Math.cos(2 * Math.PI * rnd
 // ---- APRS: UI frame -> HDLC/NRZI -> AFSK audio, 6 dB twist and noise
 console.log("\n== APRS");
 check(crc16x25(new TextEncoder().encode("123456789"), 9) === 0x906e, "CRC-16/X.25 check value 0x906E");
+const me = aprsPosition("`/^;l!J[/`\"5D}_3", "TWSS85");
+if (!me || Math.abs(me.lat - (47 + 33.85 / 60)) > 1e-9 || Math.abs(me.lon - (19 + 6.31 / 60)) > 1e-9) throw new Error("Mic-E " + JSON.stringify(me));
 const pos = aprsPosition("!4729.87N/01902.41E>Hello");
 check(pos && Math.abs(pos[0] - 47.497833) < 1e-5 && Math.abs(pos[1] - 19.040167) < 1e-5, "APRS position 47.4978 19.0402");
 function ui(src, dst, path, info) {

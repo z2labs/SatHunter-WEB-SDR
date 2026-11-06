@@ -74,7 +74,29 @@ function ax25Parse(raw, len) {
 }
 
 // APRS position (uncompressed, with or without timestamp) -> [lat, lon] or null
-function aprsPosition(info) {
+// Mic-E (info starts with ` or '): latitude and the N/S, +100° and E/W flags in the destination call
+function micEPosition(dst, info) {
+  const d = (dst || "").split("-")[0];
+  if (d.length !== 6 || info.length < 4 || !"`'\x1c\x1d".includes(info[0])) return null;
+  const v = [];
+  for (const ch of d) {
+    const c = ch.charCodeAt(0);
+    if (c >= 48 && c <= 57) v.push(c - 48); else if (c >= 65 && c <= 74) v.push(c - 65);
+    else if (c >= 80 && c <= 89) v.push(c - 80); else if ("KLZ".includes(ch)) v.push(0); else return null;
+  }
+  let lat = v[0] * 10 + v[1] + (v[2] * 10 + v[3] + (v[4] * 10 + v[5]) / 100) / 60;
+  if (d.charCodeAt(3) < 80) lat = -lat;
+  let deg = info.charCodeAt(1) - 28; if (d.charCodeAt(4) >= 80) deg += 100;
+  if (deg >= 180 && deg <= 189) deg -= 80; else if (deg >= 190 && deg <= 199) deg -= 190;
+  let min = info.charCodeAt(2) - 28; if (min >= 60) min -= 60;
+  const hun = info.charCodeAt(3) - 28;
+  if (deg < 0 || deg > 179 || min < 0 || min > 59 || hun < 0 || hun > 99) return null;
+  let lon = deg + (min + hun / 100) / 60; if (d.charCodeAt(5) >= 80) lon = -lon;
+  return { lat, lon };
+}
+
+function aprsPosition(info, dst) {
+  if (dst && "`'\x1c\x1d".includes(info[0])) return micEPosition(dst, info);
   const c = info[0]; let st;
   if (c === "!" || c === "=") st = 1; else if (c === "/" || c === "@") st = 8; else return null;
   const s = info.slice(st, st + 19); if (s.length < 19) return null;
@@ -204,7 +226,7 @@ class AfskDecoder {
       for (const { f, key } of c.out) {
         if (this.seen.some(([, k]) => k === key)) continue;
         this.seen.push([now, key]);
-        f.n = ++this.count; f.time = Date.now(); f.pos = aprsPosition(f.info);
+        f.n = ++this.count; f.time = Date.now(); f.pos = aprsPosition(f.info, f.dst);
         this.frames.push(f); if (this.frames.length > 100) this.frames.shift();
       }
       c.out.length = 0;
