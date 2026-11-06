@@ -421,7 +421,7 @@ body.kind-esp .rtl-only, body.kind-rtl .esp-only { display: none !important; }
         <button class="btn small" id="demoBtn" type="button">Run demo</button>
         <button class="btn small" id="allPortsBtn" type="button" title="Pick any serial port, also USB-UART bridges">Other port…</button>
       </div>
-      <p class="note" id="rtlNote">RTL-SDR on Windows: install the driver once with <a href="https://github.com/z2labs/SatHunter-WEB-SDR/releases/download/driver-1.0/SatHunter-RTL-SDR-Driver.exe">this one-click installer</a> (instead of Zadig). Android, ChromeOS and macOS need nothing.</p>
+      <p class="note" id="rtlNote">Windows: run <a href="https://github.com/z2labs/SatHunter-WEB-SDR/releases/download/bridge-1.0/SatHunter-Setup.exe">SatHunter-Setup.exe</a> once (the RTL-SDR driver, instead of Zadig, and SatHunter Bridge). Linux, or Firefox anywhere: install <a href="https://github.com/z2labs/SatHunter-WEB-SDR/releases/tag/bridge-1.0">SatHunter Bridge</a> once. Android, ChromeOS and macOS in Chrome need nothing.</p>
       <label class="check"><input type="checkbox" id="autoConnect"> Start when a board is plugged in</label>
       <div class="fwbox esp-only" id="fwBox">
         <button class="btn block" id="flashBtn" type="button">Reinstall firmware</button>
@@ -633,11 +633,12 @@ class SerialSource {
     this.nextFrame = -1; this.endBurst = []; this.waiters = [];
     this.dec = new TextDecoder("latin1"); this.enc = new TextEncoder();
   }
-  static supported() { return "serial" in navigator; }
+  static supported() { return "serial" in navigator || SatBridge.available; }
 
-  async connect(anyPort, existingPort) {
+  // api: navigator.serial, or SatBridge.serial (the SatHunter Bridge program)
+  async connect(anyPort, existingPort, api) {
     const opts = anyPort ? {} : { filters: [{ usbVendorId: 0x303a }] };
-    this.port = existingPort || await navigator.serial.requestPort(opts);
+    this.port = existingPort || await (api || navigator.serial).requestPort(opts);
     const info = this.port.getInfo();
     if (info.usbVendorId && info.usbVendorId !== 0x303a) this.h.log("note: this is not the S3's native USB port (VID " + info.usbVendorId.toString(16) + "); the USB-UART bridge is too slow for SPEC");
     await this.port.open({ baudRate: 2000000, bufferSize: 1 << 20 });
@@ -919,6 +920,9 @@ class DemoSource {
 
 // @@flasher-begin
 // @@flasher-end
+
+// @@bridge-begin
+// @@bridge-end
 
 // @@rtl-begin
 // @@rtl-end
@@ -1845,26 +1849,70 @@ function updateAudioUi() {
   const el = $("audioState"); if (!el) return;
   el.textContent = mode === "rtl" ? (state.rtlMode || "NFM") + " " + (vfoHz() / 1e6).toFixed(4) + " MHz" : "";
 }
-// RTL-SDR over WebUSB
+// ---------------------------------------------------------------- device access: the browser's WebUSB / Web Serial, or SatHunter Bridge
+// The bridge (bridge/, a small program) serves browsers without WebUSB / Web Serial (Firefox) and
+// computers where the browser cannot open the device (Linux's TV driver, permissions). Chrome and
+// Edge use their own access first and turn to the bridge only when that fails, then keep using it.
+function hasNative(kind) { return kind === "usb" ? "usb" in navigator : "serial" in navigator; }
+async function bridgeFirst(kind) {
+  if (EMBEDDED) return false;
+  if (hasNative(kind) && !state.bridge) return false;
+  return !!(await SatBridge.probe());
+}
+function bridgeLink(text) {
+  const d = SatBridge.download();
+  return '<a href="' + d.url + '" target="_blank" rel="noopener">' + text + (d.os ? " for " + d.os : "") + "</a>";
+}
+function noAccessHtml(what) {
+  return "This browser cannot reach " + what + " by itself. Install the free <b>SatHunter Bridge</b> once (" + bridgeLink("download") +
+    ", one click), then press the button again. Or use <b>Chrome</b> or <b>Edge</b>.";
+}
+function rememberBridge() { if (!state.bridge) { state.bridge = true; save(); log("using SatHunter Bridge from now on"); } }
+function bridgeHotplug() {
+  if (bridgeHotplug.on) return; bridgeHotplug.on = true;
+  SatBridge.usb.addEventListener("disconnect", (e) => { if (mode === "rtl" && source && source.dev === e.device) { log("RTL-SDR unplugged"); disconnect(); } });
+  SatBridge.usb.addEventListener("connect", (e) => { if (state.autoConnect && mode !== "serial" && mode !== "rtl" && !connecting && !flashing) setTimeout(() => connectRtl(e.device, true), 600); });
+  SatBridge.serial.addEventListener("connect", (e) => { setTimeout(() => autoStart(e.target), 800); });
+  SatBridge.serial.addEventListener("disconnect", (e) => { if (mode === "serial" && source && source.port === e.target) { log("board unplugged"); disconnect(); } });
+}
+// RTL-SDR over WebUSB or SatHunter Bridge
 async function connectRtl(existing, quiet) {
-  if (!RtlSource.supported()) {
-    $("srcNote").innerHTML = "This browser has no WebUSB. Use <b>Chrome</b> or <b>Edge</b> (Windows, macOS, Linux, Android, ChromeOS).";
-    if (!quiet) toast("No WebUSB in this browser: use Chrome or Edge."); return;
-  }
   if (connecting || flashing) return;
   audioOut.ensure();            // a click started this: the browser lets the sound on now
-  const prev = source, s = new RtlSource(hooks);
-  setStatus("busy", "Connecting"); connecting = true; rackTouched();
-  try { await s.connect(existing); }
+  connecting = true;
+  const viaBridge = existing ? existing instanceof SatBridge.BridgeUSBDevice : await bridgeFirst("usb");
+  if (!viaBridge && !hasNative("usb")) {
+    connecting = false;
+    $("srcNote").innerHTML = noAccessHtml("an RTL-SDR");
+    if (!quiet) { toast("Install SatHunter Bridge once to use the RTL-SDR in this browser.", true); showRack(); }
+    return;
+  }
+  const prev = source;
+  let s = new RtlSource(hooks);
+  setStatus("busy", "Connecting"); rackTouched();
+  try {
+    try { await s.connect(existing, viaBridge ? SatBridge.usb : navigator.usb); }
+    catch (e) {
+      // the browser could not open the stick (Linux's TV driver, no udev rule, Windows driver): try the bridge
+      if (viaBridge || !(e && e.driver) || !(await SatBridge.probe(true))) throw e;
+      log("rtl: the browser cannot open the stick (" + e.message + "), trying SatHunter Bridge");
+      s = new RtlSource(hooks);
+      await s.connect(null, SatBridge.usb);
+    }
+    if (s.dev instanceof SatBridge.BridgeUSBDevice) { rememberBridge(); bridgeHotplug(); }
+  }
   catch (e) {
     connecting = false;
     const win = /Windows/i.test(navigator.userAgent), lin = /Linux/i.test(navigator.userAgent) && !/Android/i.test(navigator.userAgent);
-    let msg = e && e.name === "NotFoundError" ? "No RTL-SDR selected." : "RTL-SDR: " + ((e && e.message) || e);
-    if (e && e.driver) msg = win ? "Windows still uses its TV-stick driver for this RTL-SDR. Install the RTL-SDR driver once (one click), unplug and plug the stick, then connect again."
-      : lin ? "Linux's TV driver holds the stick: run  echo 'blacklist dvb_usb_rtl28xxu' | sudo tee /etc/modprobe.d/rtlsdr.conf  and add a udev rule for 0bda:2838 (see the README), then re-plug it."
-      : "The RTL-SDR is busy: close other SDR programs and try again.";
+    let msg = e && e.name === "NotFoundError" ? (e.bridge || e.message === "No RTL-SDR is plugged in." ? "No RTL-SDR is plugged in." : "No RTL-SDR selected.") : "RTL-SDR: " + ((e && e.message) || e);
+    let html = null;
+    if (e && e.driver) {
+      if (win) msg = "Windows still uses its TV-stick driver for this RTL-SDR. Run the SatHunter installer once (one click), unplug and plug the stick, then connect again.";
+      else if (lin) { msg = "Linux's TV driver holds the stick. Install SatHunter Bridge once (one click), then press RTL-SDR again."; html = "Linux's TV driver holds the stick. Install the free <b>SatHunter Bridge</b> once (" + bridgeLink("download") + ", one click), then press <b>RTL-SDR</b> again. Nothing to type."; }
+      else msg = "The RTL-SDR is busy: close other SDR programs and try again.";
+    }
     log("rtl connect failed: " + ((e && e.message) || e));
-    if (!quiet) { $("srcNote").textContent = msg; toast(msg, true); if (e && e.driver && win) $("rtlNote").classList.add("result", "bad"); showRack(); }
+    if (!quiet) { if (html) $("srcNote").innerHTML = html; else $("srcNote").textContent = msg; toast(msg, true); if (e && e.driver && win) $("rtlNote").classList.add("result", "bad"); showRack(); }
     setStatus(mode === "demo" ? "demo" : "err", mode === "demo" ? "Demo" : "Not connected");
     return;
   }
@@ -1898,24 +1946,35 @@ function startDemo() {
   $("demoBtn").textContent = "Run demo"; $("demoBtn").disabled = true;
 }
 async function connect(anyPort, existingPort, quiet) {
-  if (!SerialSource.supported()) {
-    $("srcNote").innerHTML = "This browser has no USB serial access. Use <b>Chrome</b> or <b>Edge</b> on a computer (Windows, macOS, Linux) and open this page from a file or an https address.";
+  if (connecting || flashing) return;
+  connecting = true;
+  const viaBridge = existingPort ? existingPort instanceof SatBridge.BridgeSerialPort : await bridgeFirst("serial");
+  if (!viaBridge && !hasNative("serial")) {
+    connecting = false;
+    $("srcNote").innerHTML = noAccessHtml("the ESP32-S3 board");
     return;
   }
-  if (connecting || flashing) return;
   const prev = source;
-  const s = new SerialSource(hooks);
+  let s = new SerialSource(hooks);
   setStatus("busy", "Connecting");
-  connecting = true; updateFwUi(); $("connectBtn").disabled = true; rackTouched();
+  updateFwUi(); $("connectBtn").disabled = true; rackTouched();
   try {
-    await s.connect(anyPort, existingPort);
+    try { await s.connect(anyPort, existingPort, viaBridge ? SatBridge.serial : navigator.serial); }
+    catch (e) {
+      // the browser could not open the port (Linux: not in the dialout group): try the bridge
+      if (viaBridge || !(e && e.name === "NetworkError") || !(await SatBridge.probe(true))) throw e;
+      log("the browser cannot open the port (" + e.message + "), trying SatHunter Bridge");
+      s = new SerialSource(hooks);
+      await s.connect(anyPort, null, SatBridge.serial);
+    }
+    if (s.port instanceof SatBridge.BridgeSerialPort) { rememberBridge(); bridgeHotplug(); }
     connecting = false; $("connectBtn").disabled = false; updateFwUi(); rackTouched();
     checkPortKind(s.port);
   } catch (e) {
     connecting = false; $("connectBtn").disabled = false;
     if (e && e.port) boardPort = e.port;
     if (e && e.needsFirmware) { fwState.needs = true; updateFwUi(); showRack(); }
-    const msg = e && e.name === "NotFoundError" ? "No port selected." :
+    const msg = e && e.name === "NotFoundError" ? (/^No ESP32/.test(e.message) ? e.message : "No port selected.") :
       e && e.name === "SecurityError" ? "USB serial access is blocked in this embedded preview. Open the downloaded HTML file in Chrome or Edge." :
       e && e.name === "NetworkError" ? "The port is busy. Close SDR++ or any other program that has it open, then try again." :
       (e && e.message) || String(e);
@@ -1969,10 +2028,12 @@ function updateFwUi() {
 function flashUi(stage, frac) { $("flashStage").textContent = stage; $("flashBar").style.width = (frac * 100).toFixed(1) + "%"; }
 async function startFlash() {
   if (flashing || connecting) return;
-  if (!SerialSource.supported()) {
-    showFlashResult(false, "This browser has no USB serial access. Use Chrome or Edge on a computer, and open the page file directly (not in an embedded preview).");
+  const viaBridge = boardPort ? boardPort instanceof SatBridge.BridgeSerialPort : await bridgeFirst("serial");
+  if (!viaBridge && !hasNative("serial")) {
+    const r = $("flashResult"); r.hidden = false; r.className = "note result bad"; r.innerHTML = noAccessHtml("the ESP32-S3 board");
     return;
   }
+  const api = viaBridge ? SatBridge.serial : navigator.serial;
   flashing = true; updateFwUi(); showRack();
   $("flashResult").hidden = true; $("flashProg").hidden = false; flashUi("Starting", 0);
   let port = boardPort, ok = false, msg = "";
@@ -1980,11 +2041,11 @@ async function startFlash() {
     if (mode === "serial" && source && source.port) { port = source.port; await source.close(); }
     if (source && source.stop) source.stop();
     mode = "flash"; setStatus("busy", "Flashing"); $("connectLabel").textContent = "Connect";
-    if (!port) port = await navigator.serial.requestPort({ filters: UART_VIDS.map((v) => ({ usbVendorId: v })) });
+    if (!port) port = await api.requestPort({ filters: UART_VIDS.map((v) => ({ usbVendorId: v })) });
     const info = port.getInfo(), usbJtag = !info.usbVendorId || info.usbVendorId === 0x303a;
     const bundle = customBundle || await loadEmbeddedBundle();
     log("flash: " + bundle.images.length + " images, " + (usbJtag ? "native USB" : "USB-UART bridge") + " port");
-    const f = new EspFlasher(port, log);
+    const f = new EspFlasher(port, log, port instanceof SatBridge.BridgeSerialPort ? SatBridge.serial : navigator.serial);
     port = await f.flash(bundle.images, usbJtag, flashUi);
     boardPort = port; ok = true;
     msg = "Firmware " + (bundle.version.build_date || "") + " installed. The board restarts and the spectrum starts.";
@@ -2136,8 +2197,16 @@ if (state.freqHz < FMIN || state.freqHz > FMAX) {
 }
 startDemo();
 requestAnimationFrame(tick);
-if (navigator.usb && !EMBEDDED) navigator.usb.getDevices().then((ds) => { const d = ds.find((x) => x.vendorId === 0x0bda); if (d && state.autoConnect && mode === "demo") connectRtl(d, true); }).catch(() => {});
-if (navigator.serial && !EMBEDDED) navigator.serial.getPorts().then((ports) => { const p = ports.find((x) => { try { return x.getInfo().usbVendorId === 0x303a; } catch (e) { return false; } }); if (p) autoStart(p); }).catch(() => {});
+// SatHunter Bridge: in browsers without WebUSB / Web Serial, or once it has been needed here
+if (!EMBEDDED && (!hasNative("usb") || !hasNative("serial") || state.bridge)) SatBridge.probe().then((b) => {
+  if (!b) return;
+  log("SatHunter Bridge " + b.version + " (" + b.os + ")");
+  bridgeHotplug();
+  if (state.autoConnect && (!hasNative("usb") || state.bridge)) SatBridge.usb.getDevices().then((ds) => { if (ds.length && mode === "demo") connectRtl(ds[0], true); }).catch(() => {});
+  if (!hasNative("serial") || state.bridge) SatBridge.serial.getPorts().then((ps) => { const p = ps.find((x) => x.vid === 0x303a); if (p) autoStart(p); }).catch(() => {});
+});
+if (navigator.usb && !EMBEDDED && !state.bridge) navigator.usb.getDevices().then((ds) => { const d = ds.find((x) => x.vendorId === 0x0bda); if (d && state.autoConnect && mode === "demo") connectRtl(d, true); }).catch(() => {});
+if (navigator.serial && !EMBEDDED && !state.bridge) navigator.serial.getPorts().then((ports) => { const p = ports.find((x) => { try { return x.getInfo().usbVendorId === 0x303a; } catch (e) { return false; } }); if (p) autoStart(p); }).catch(() => {});
 </script>
 </body>
 </html>

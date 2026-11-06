@@ -40,7 +40,8 @@ function slipEncode(p) {
 const le32 = (x) => [x & 0xFF, (x >>> 8) & 0xFF, (x >>> 16) & 0xFF, (x >>> 24) & 0xFF];
 
 class EspFlasher {
-  constructor(port, log) { this.port = port; this.log = log || (() => {}); this.rx = new ByteBuf(); this.waiters = []; this.isOpen = false; }
+  // api: navigator.serial, or SatBridge.serial (the SatHunter Bridge program)
+  constructor(port, log, api) { this.api = api || navigator.serial; this.port = port; this.log = log || (() => {}); this.rx = new ByteBuf(); this.waiters = []; this.isOpen = false; }
 
   async openPort(baud) {
     await this.port.open({ baudRate: baud, bufferSize: 1 << 16 });
@@ -73,7 +74,7 @@ class EspFlasher {
       await sleep(250);
       try { await this.openPort(baud); return; } catch (e) {}
       try {
-        for (const p of await navigator.serial.getPorts()) {
+        for (const p of await this.api.getPorts()) {
           if (p === this.port || p.getInfo().usbVendorId !== 0x303a) continue;
           try { this.port = p; await this.openPort(baud); this.log("flash: board came back as a new port"); return; } catch (e) {}
         }

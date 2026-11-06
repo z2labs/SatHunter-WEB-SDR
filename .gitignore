@@ -9,3 +9,5 @@ render.err
 test/fixtures/raw/
 docs/banner/banner.html
 docs/banner/wf.png
+bridge/target/
+bridge/packaging/windows/Output/

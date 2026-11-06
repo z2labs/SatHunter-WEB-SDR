@@ -175,17 +175,19 @@ class RtlSource {
     this.fft = null; this.win = null; this.wsum = 1; this.re = null; this.im = null; this.acc = null;
     this.spanLeft = 0; this.toSkip = 0; this.avgN = 0; this.demod = null;
   }
-  static supported() { return typeof navigator !== "undefined" && "usb" in navigator; }
+  static supported() { return (typeof navigator !== "undefined" && "usb" in navigator) || (typeof SatBridge !== "undefined" && SatBridge.available); }
   binsFor() { return [1024, 2048, 4096]; }
-  async connect(existing) {
-    const dev = existing || await navigator.usb.requestDevice({ filters: RtlSdrUsb.filters });
+  // api: navigator.usb, or SatBridge.usb (the SatHunter Bridge program)
+  async connect(existing, api) {
+    const dev = existing || await (api || navigator.usb).requestDevice({ filters: RtlSdrUsb.filters });
     this.dev = dev;
     const r = new RtlSdrUsb(dev, (l) => this.h.log("rtl: " + l));
     try { await r.open(); }
     catch (e) {
       try { if (dev.opened) await dev.close(); } catch (x) {}
       const m = (e && (e.name + " " + e.message)) || String(e);
-      const err = new Error(m); err.driver = /claim|access denied|SecurityError|NetworkError|InvalidState/i.test(m); err.dev = dev;
+      const err = new Error(e && e.bridge ? e.message : m); err.driver = !(e && e.bridge) && /claim|access denied|SecurityError|NetworkError|InvalidState/i.test(m); err.dev = dev;
+      err.bridge = !!(e && e.bridge); err.code = e && e.code;
       throw err;
     }
     this.rtl = r; this.open = true; this.gains = r.gains.slice();

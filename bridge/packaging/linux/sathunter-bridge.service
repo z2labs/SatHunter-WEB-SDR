@@ -1,0 +1,19 @@
+[Unit]
+Description=SatHunter Bridge: RTL-SDR and ESP32-S3 for SatHunter Web SDR in any browser
+Documentation=https://github.com/z2labs/SatHunter-WEB-SDR/tree/main/bridge
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/sathunter-bridge
+DynamicUser=yes
+SupplementaryGroups=dialout
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,172 @@
+name: SatHunter Bridge
+
+# Builds SatHunter Bridge (bridge/) for Linux (.deb and tar.gz, x86-64 and arm64, static musl),
+# Windows (SatHunter-Setup.exe: RTL-SDR driver + bridge) and macOS (universal zip).
+# Run it by hand with a release tag (bridge-1.0) to publish the files the page links to.
+on:
+  push:
+    paths: ["bridge/**", ".github/workflows/bridge.yml"]
+  pull_request:
+    paths: ["bridge/**", ".github/workflows/bridge.yml"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Publish as this release tag (e.g. bridge-1.0), empty = artifacts only"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  LIBWDI_COMMIT: 30df0c0e051b0132c4b9ebed8c054bc8eb3aaaec
+  WDK_URL: https://go.microsoft.com/fwlink/p/?LinkID=253170
+  LIBUSB0_URL: https://github.com/mcuee/libusb-win32/releases/download/release_1.4.0.0/libusb-win32-bin-1.4.0.0.zip
+  LIBUSBK_URL: https://github.com/mcuee/libusbk/releases/download/V3.1.0.0/libusbK-3.1.0.0-bin.7z
+
+jobs:
+  linux:
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-22.04, target: x86_64-unknown-linux-musl, deb: amd64 }
+          - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-musl, deb: arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build (static)
+        run: |
+          sudo apt-get install -y musl-tools
+          cd bridge
+          cargo test
+          cargo build --release --target ${{ matrix.target }}
+      - name: Smoke test
+        run: node test/bridge_smoke.mjs bridge/target/${{ matrix.target }}/release/sathunter-bridge
+      - name: Package
+        run: |
+          VER=$(grep -m1 '^version' bridge/Cargo.toml | cut -d'"' -f2)
+          BIN=bridge/target/${{ matrix.target }}/release/sathunter-bridge
+          bridge/packaging/linux/build-deb.sh $BIN ${{ matrix.deb }} $VER out
+          mkdir -p tgz/sathunter-bridge
+          cp $BIN bridge/packaging/linux/install.sh bridge/packaging/linux/sathunter-bridge.service tgz/sathunter-bridge/
+          tar -C tgz -czf out/sathunter-bridge-linux-${{ matrix.deb }}.tar.gz sathunter-bridge
+          # the .deb installs and removes cleanly
+          sudo dpkg -i out/*.deb && systemctl is-active sathunter-bridge && sudo dpkg --purge sathunter-bridge
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge-linux-${{ matrix.deb }}
+          path: out/*
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - name: Build (universal)
+        run: |
+          cd bridge
+          cargo test
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p ../mac/sathunter-bridge
+          lipo -create -output ../mac/sathunter-bridge/sathunter-bridge target/aarch64-apple-darwin/release/sathunter-bridge target/x86_64-apple-darwin/release/sathunter-bridge
+      - name: Smoke test
+        run: node test/bridge_smoke.mjs mac/sathunter-bridge/sathunter-bridge
+      - name: Package
+        run: |
+          cp bridge/packaging/macos/install.command mac/sathunter-bridge/
+          mkdir -p out && (cd mac && zip -r ../out/sathunter-bridge-macos.zip sathunter-bridge)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge-macos
+          path: out/*
+
+  windows:
+    runs-on: windows-2022   # libwdi projects use the VS 2022 toolset (v143)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the bridge
+        shell: pwsh
+        run: |
+          cd bridge
+          cargo test
+          cargo build --release
+      - name: Smoke test
+        run: node test/bridge_smoke.mjs bridge/target/release/sathunter-bridge.exe
+
+      - name: libwdi source and redistributables
+        shell: cmd
+        run: |
+          git clone https://github.com/pbatard/libwdi libwdi
+          cd libwdi
+          git checkout %LIBWDI_COMMIT%
+          curl -L %WDK_URL% -o wdk-redist.msi
+          curl -L %LIBUSB0_URL% -o libusb0-redist.zip
+          curl -L %LIBUSBK_URL% -o libusbk-redist.7z
+          msiexec /a wdk-redist.msi /qn TARGETDIR=%CD%\wdk
+          7z x libusb0-redist.zip
+          7z x libusbk-redist.7z
+          del *.zip *.7z
+          move libusb-win32* libusb0
+          move libusbK* libusbk
+      - uses: microsoft/setup-msbuild@v2
+      - name: Build wdi-simple (32-bit, runs on every Windows)
+        shell: pwsh
+        run: |
+          cd libwdi
+          $macros = 'WDK_DIR="../wdk/Windows Kits/8.0";LIBUSB0_DIR="../libusb0";LIBUSBK_DIR="../libusbk/bin"'
+          msbuild libwdi.sln /m "/p:Configuration=Release" "/p:Platform=Win32" "/p:BuildMacros=$macros" | Out-Null
+          $exe = Get-ChildItem -Recurse -Filter wdi-simple.exe | Select-Object -First 1
+          if (-not $exe) { Write-Output "::error title=libwdi build::wdi-simple.exe not built"; exit 1 }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item $exe.FullName out\wdi-simple.exe
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup *\ISCC.exe", "C:\Program Files\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y | Out-Null
+            $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup *\ISCC.exe", "C:\Program Files\Inno Setup *\ISCC.exe" | Select-Object -First 1
+          }
+          $ver = (Select-String -Path bridge\Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          & $iscc.FullName "/DWdiSimple=$pwd\libwdi\out\wdi-simple.exe" "/DBridgeExe=$pwd\bridge\target\release\sathunter-bridge.exe" "/DAppVer=$ver" bridge\packaging\windows\sathunter-setup.iss
+          if ($LASTEXITCODE) { Write-Output "::error title=Inno Setup::ISCC failed"; exit 1 }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item bridge\packaging\windows\Output\SatHunter-Setup.exe out\
+          Copy-Item bridge\target\release\sathunter-bridge.exe out\
+          Get-FileHash out\*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge-windows
+          path: out/*
+
+  release:
+    if: ${{ inputs.release_tag != '' }}
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist
+          gh release create "${{ inputs.release_tag }}" dist/* --repo "${{ github.repository }}" \
+            --title "SatHunter Bridge ${{ inputs.release_tag }}" \
+            --notes "SatHunter Bridge: the RTL-SDR and the ESP32-S3 SDR in any browser, Firefox too, with nothing to type.
+
+          - **Windows**: SatHunter-Setup.exe (RTL-SDR driver instead of Zadig + the bridge, starts with Windows). Unsigned: *More info* -> *Run anyway*.
+          - **Debian, Ubuntu, Raspberry Pi OS, Mint**: sathunter-bridge_*_amd64.deb (PC) or _arm64.deb (Raspberry Pi 4/5), double-click to install.
+          - **Other Linux**: sathunter-bridge-linux-*.tar.gz, then sudo ./install.sh.
+          - **macOS** (only Firefox / Safari need it): sathunter-bridge-macos.zip, then install.command."

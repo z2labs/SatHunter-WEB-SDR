@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+  rm -f /etc/udev/rules.d/60-sathunter-bridge.rules /etc/modprobe.d/sathunter-bridge-rtlsdr.conf
+  udevadm control --reload-rules >/dev/null 2>&1 || true
+  [ -d /run/systemd/system ] && systemctl daemon-reload || true
+fi
+exit 0

@@ -18,7 +18,7 @@ jobs:
       - name: Install Playwright
         run: |
           pip install playwright==1.47.0
-          python -m playwright install --with-deps chromium
+          python -m playwright install --with-deps chromium firefox
       - name: index.html matches src/ and fw/
         run: python tools/build.py --check
       - name: Unit tests (SPC1 parser, MD5, SLIP)
@@ -39,6 +39,10 @@ jobs:
           python test/sats.py
           python test/rtlweb.py
           python test/decweb.py
+      - name: Through SatHunter Bridge, without WebUSB / Web Serial (Chromium and Firefox)
+        env:
+          REQUIRE_FIREFOX: "1"
+        run: python test/bridgeweb.py
       - name: Satellite data builder (fixture)
         run: |
           python test/fixtures/make_fixture.py

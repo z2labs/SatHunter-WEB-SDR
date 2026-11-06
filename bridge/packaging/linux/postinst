@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+# udev rules for RTL-SDR sticks and ESP32 boards, DVB-T TV driver off the sticks
+/usr/bin/sathunter-bridge --setup || true
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload || true
+  systemctl enable sathunter-bridge.service >/dev/null 2>&1 || true
+  systemctl restart sathunter-bridge.service || true
+fi
+exit 0
