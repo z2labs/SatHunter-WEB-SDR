@@ -219,6 +219,9 @@ details.log summary { cursor: pointer; font: 600 11px var(--font-label); letter-
 .card h3 { margin: 0; font: 600 15px var(--font-label); letter-spacing: 0.03em; color: var(--warn); }
 .card p { margin: 0; font-size: 13.5px; color: var(--fg); line-height: 1.5; }
 .card .row { justify-content: flex-end; }
+#bridgeCard .bc-steps { color: var(--muted, #9aa); font-size: 12.5px; }
+#bridgeCard .bc-wait { color: var(--muted, #9aa); font-size: 12px; }
+#bridgeCard a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .scrim { display: none; }
 input[type=number].short { width: 64px; flex: 0 0 64px; }
 .logstate { font: 12px var(--font-num); color: var(--accent); }
@@ -396,6 +399,16 @@ body.kind-esp .rtl-only, body.kind-rtl .esp-only { display: none !important; }
       <div class="declines" id="decLines"></div>
     </div>
     <div class="toast" id="toast" role="status" hidden></div>
+    <div class="card" id="bridgeCard" role="dialog" aria-labelledby="bridgeCardTitle" hidden>
+      <h3 id="bridgeCardTitle">Use your RTL-SDR or ESP32 board in this browser</h3>
+      <p id="bridgeCardText">This browser cannot reach USB radios by itself. Install the free <b>SatHunter Bridge</b> once and it works here too; nothing else to set up.</p>
+      <p class="bc-steps" id="bridgeCardSteps"></p>
+      <p class="bc-wait" id="bridgeCardWait">Waiting for the bridge… the page connects by itself when it is installed.</p>
+      <div class="row">
+        <button class="btn small" id="bridgeCardLater" type="button">Later</button>
+        <a class="btn small primary" id="bridgeCardGet" href="#" target="_blank" rel="noopener">Download</a>
+      </div>
+    </div>
     <div class="card" id="portCard" role="alertdialog" aria-labelledby="portCardTitle" hidden>
       <h3 id="portCardTitle">This is the board's UART port</h3>
       <p id="portCardText">The selected port belongs to a USB-UART bridge (CH343, CP210x, FTDI). The spectrum needs the ESP32-S3's own USB port: on a DevKit it is the connector marked USB, next to the one marked UART. Move the cable, then connect again.</p>
@@ -1523,6 +1536,8 @@ function initControls() {
   $("playBtn").addEventListener("click", togglePlay);
   $("scrim").addEventListener("click", () => { closeRack(); setSats(false); });
   $("portCardOk").addEventListener("click", () => { $("portCard").hidden = true; });
+  $("bridgeCardLater").addEventListener("click", () => { $("bridgeCard").hidden = true; bridgeLater = true; });
+  $("bridgeCardGet").addEventListener("click", () => { $("bridgeCardWait").textContent = "Install it, then come back: the page connects by itself."; });
   $("palette").value = state.palette;
   $("palette").addEventListener("change", () => { state.palette = $("palette").value; buildLut(); save(); });
   $("peakHold").checked = state.peakHold;
@@ -1865,7 +1880,34 @@ function bridgeLink(text) {
 }
 function noAccessHtml(what) {
   return "This browser cannot reach " + what + " by itself. Install the free <b>SatHunter Bridge</b> once (" + bridgeLink("download") +
-    ", one click), then press the button again. Or use <b>Chrome</b> or <b>Edge</b>.";
+    ", one click), then press the button again.";
+}
+// offer the bridge installer for this computer; watch for it and connect when it appears
+let bridgeWatch = null, bridgeLater = false;
+function offerBridge(force) {
+  if (EMBEDDED || SatBridge.available) return;
+  if (bridgeLater && !force) return;
+  const d = SatBridge.download();
+  if (!d.url) {   // phones: there is no bridge for them
+    $("srcNote").innerHTML = d.os === "Android" ? "Use <b>Chrome</b> on Android for the RTL-SDR and the ESP32 board." : "An iPhone or iPad cannot use USB radios from a browser; the satellite list and the radar still work.";
+    return;
+  }
+  $("bridgeCardGet").href = d.url;
+  $("bridgeCardGet").textContent = d.file ? "Download for " + d.os : "Open the downloads";
+  $("bridgeCardSteps").textContent = d.steps;
+  $("bridgeCard").hidden = false;
+  if (!bridgeWatch) bridgeWatch = setInterval(async () => {
+    if (!(await SatBridge.probe(true))) return;
+    clearInterval(bridgeWatch); bridgeWatch = null;
+    $("bridgeCard").hidden = true;
+    log("SatHunter Bridge " + SatBridge.info.version + " found");
+    toast("SatHunter Bridge is installed: connecting…");
+    bridgeHotplug();
+    if (state.autoConnect && mode !== "rtl" && mode !== "serial") {
+      try { const ds = await SatBridge.usb.getDevices(); if (ds.length) { connectRtl(ds[0], true); return; } } catch (e) {}
+      try { const ps = await SatBridge.serial.getPorts(); const p = ps.find((x) => x.vid === 0x303a); if (p) autoStart(p); } catch (e) {}
+    }
+  }, 3000);
 }
 function rememberBridge() { if (!state.bridge) { state.bridge = true; save(); log("using SatHunter Bridge from now on"); } }
 function bridgeHotplug() {
@@ -1884,7 +1926,7 @@ async function connectRtl(existing, quiet) {
   if (!viaBridge && !hasNative("usb")) {
     connecting = false;
     $("srcNote").innerHTML = noAccessHtml("an RTL-SDR");
-    if (!quiet) { toast("Install SatHunter Bridge once to use the RTL-SDR in this browser.", true); showRack(); }
+    if (!quiet) offerBridge(true);
     return;
   }
   const prev = source;
@@ -1912,6 +1954,7 @@ async function connectRtl(existing, quiet) {
       else msg = "The RTL-SDR is busy: close other SDR programs and try again.";
     }
     log("rtl connect failed: " + ((e && e.message) || e));
+    if (!quiet && html) offerBridge(true);
     if (!quiet) { if (html) $("srcNote").innerHTML = html; else $("srcNote").textContent = msg; toast(msg, true); if (e && e.driver && win) $("rtlNote").classList.add("result", "bad"); showRack(); }
     setStatus(mode === "demo" ? "demo" : "err", mode === "demo" ? "Demo" : "Not connected");
     return;
@@ -1952,6 +1995,7 @@ async function connect(anyPort, existingPort, quiet) {
   if (!viaBridge && !hasNative("serial")) {
     connecting = false;
     $("srcNote").innerHTML = noAccessHtml("the ESP32-S3 board");
+    if (!quiet) offerBridge(true);
     return;
   }
   const prev = source;
@@ -2031,6 +2075,7 @@ async function startFlash() {
   const viaBridge = boardPort ? boardPort instanceof SatBridge.BridgeSerialPort : await bridgeFirst("serial");
   if (!viaBridge && !hasNative("serial")) {
     const r = $("flashResult"); r.hidden = false; r.className = "note result bad"; r.innerHTML = noAccessHtml("the ESP32-S3 board");
+    offerBridge(true);
     return;
   }
   const api = viaBridge ? SatBridge.serial : navigator.serial;
@@ -2082,7 +2127,9 @@ buildDigits(); renderDigits(); initControls(); buildBins(); bindDigits();
 bindPlot(specCv, true); bindPlot(wfCv, false); bindDivider();
 new ResizeObserver(resize).observe($("view"));
 resize();
-if (!SerialSource.supported()) $("srcNote").innerHTML = "This browser has no USB serial access, so the page runs on demo data. For a live board use <b>Chrome</b> or <b>Edge</b> on a computer.";
+if (!SerialSource.supported()) $("srcNote").innerHTML = SatBridge.download().url
+  ? "Demo data until a radio is connected. In this browser the RTL-SDR and the ESP32 board work through " + bridgeLink("SatHunter Bridge") + " (one-click install)."
+  : "Demo data: this device cannot use USB radios from a browser.";
 
 // ---------------------------------------------------------------- decoders (APRS, SSTV) on the audio
 const dec = { aprs: null, sstv: null, rate: 0, aprsSeen: 0, sstvKey: "", sstvBig: false };
@@ -2199,7 +2246,7 @@ startDemo();
 requestAnimationFrame(tick);
 // SatHunter Bridge: in browsers without WebUSB / Web Serial, or once it has been needed here
 if (!EMBEDDED && (!hasNative("usb") || !hasNative("serial") || state.bridge)) SatBridge.probe().then((b) => {
-  if (!b) return;
+  if (!b) { if (!hasNative("usb")) offerBridge(); return; }
   log("SatHunter Bridge " + b.version + " (" + b.os + ")");
   bridgeHotplug();
   if (state.autoConnect && (!hasNative("usb") || state.bridge)) SatBridge.usb.getDevices().then((ds) => { if (ds.length && mode === "demo") connectRtl(ds[0], true); }).catch(() => {});

@@ -14,6 +14,7 @@ const SatBridge = (() => {
     linuxArm: RELEASE + "sathunter-bridge_1.0.0_arm64.deb",
     windows: RELEASE + "SatHunter-Setup.exe",
     mac: "https://github.com/z2labs/SatHunter-WEB-SDR/releases/tag/bridge-1.0",
+    macZip: RELEASE + "sathunter-bridge-macos.zip",
     all: "https://github.com/z2labs/SatHunter-WEB-SDR/releases/tag/bridge-1.0",
   };
 
@@ -227,12 +228,20 @@ const SatBridge = (() => {
   };
 
   // ------------------------------------------------------------------ install link for this computer
+  // the installer for this computer, and how to run it
   function download() {
     const ua = navigator.userAgent || "", p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
-    if (/Windows/i.test(ua)) return { os: "Windows", url: DOWNLOADS.windows };
-    if (/Mac/i.test(p) && !/iPhone|iPad/i.test(ua)) return { os: "macOS", url: DOWNLOADS.mac };
-    if (/Linux/i.test(ua) && !/Android/i.test(ua)) return { os: "Linux", url: /aarch64|arm/i.test(p + ua) ? DOWNLOADS.linuxArm : DOWNLOADS.linux };
-    return { os: "", url: DOWNLOADS.all };
+    if (/Android|iPhone|iPad|iPod/i.test(ua)) return { os: /Android/i.test(ua) ? "Android" : "iOS", url: "", file: "", steps: "" };
+    if (/Windows/i.test(ua)) return { os: "Windows", url: DOWNLOADS.windows, file: "SatHunter-Setup.exe",
+      steps: "Run it and press Install. Windows may say “Windows protected your PC”: More info → Run anyway. It also installs the RTL-SDR driver (instead of Zadig)." };
+    if (/Mac/i.test(p + ua)) return { os: "macOS", url: DOWNLOADS.macZip, file: "sathunter-bridge-macos.zip",
+      steps: "Open the zip, then right-click install.command → Open (the first time macOS asks because it is not from the App Store)." };
+    if (/Linux|X11|CrOS/i.test(p + ua)) {
+      const arm = /aarch64|arm/i.test(p + ua);
+      return { os: arm ? "Linux (ARM, Raspberry Pi)" : "Linux", url: arm ? DOWNLOADS.linuxArm : DOWNLOADS.linux, file: arm ? "sathunter-bridge_1.0.0_arm64.deb" : "sathunter-bridge_1.0.0_amd64.deb",
+        steps: "Open the downloaded .deb (double-click) and press Install (Ubuntu, Debian, Mint, Raspberry Pi OS). Other distributions: the tar.gz on the release page, then sudo ./install.sh." };
+    }
+    return { os: "", url: DOWNLOADS.all, file: "", steps: "Pick the file for your computer on the release page." };
   }
 
   return {

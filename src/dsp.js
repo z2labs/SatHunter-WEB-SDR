@@ -222,10 +222,24 @@ class RtlSource {
   }
   async reader() {
     const r = this.rtl, q = [];
+    // endpoint A stays stalled after the init until resetBuffer (in loop()) clears it: reads sent
+    // earlier come back STALL on Linux (usbfs) and through the bridge
+    while (this.open && !this.cur.started) await sleep(10);
+    let stalls = 0;
     try {
       while (this.open) {
         while (q.length < RTL_INFLIGHT) q.push(r.readBlock(RTL_BLOCK));
-        const u8 = await q.shift();
+        let u8;
+        try { u8 = await q.shift(); stalls = 0; }
+        catch (e) {
+          // a stall (FIFO overflow, a reset racing the reads): drain, reset the FIFO, go on
+          if (!/stall/i.test((e && e.message) || "") || ++stalls > 5 || !this.open) throw e;
+          for (const p of q.splice(0)) { try { await p; } catch (x) {} }
+          this.h.log("rtl: bulk read stalled, restarting the stream");
+          await sleep(20);
+          await r.resetBuffer();
+          continue;
+        }
         this.stats.bytes += u8.length;
         if (!this.paused && this.cur.span) this.process(u8);
       }

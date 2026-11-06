@@ -140,6 +140,29 @@ async def chrome_tv_driver(b):
     finally:
         stop_bridge(br)
 
+async def install_offer(b, name):
+    """No WebUSB and no bridge yet: the page offers the installer for this computer, then finds the
+    bridge by itself once it runs and starts the RTL-SDR."""
+    ctx, pg, errs = await new_page(b)
+    await pg.goto(PAGE)
+    await pg.wait_for_timeout(2500)
+    shown = await pg.is_visible("#bridgeCard")
+    href = await pg.get_attribute("#bridgeCardGet", "href")
+    print(name, "| install card:", shown, "|", await pg.inner_text("#bridgeCardGet"), "|", href)
+    assert shown and "releases/download/bridge-1.0/" in href, href
+    br = start_bridge()
+    try:
+        for _ in range(40):
+            await pg.wait_for_timeout(250)
+            if await pg.evaluate("mode") == "rtl": break
+        await pg.wait_for_timeout(1500)
+        print(name, "| after install: card", await pg.is_visible("#bridgeCard"), "| mode", await pg.evaluate("mode"), "| frames", await pg.evaluate("source.stats.frames"))
+        assert not await pg.is_visible("#bridgeCard") and await pg.evaluate("mode") == "rtl" and await pg.evaluate("source.stats.frames") > 10
+        assert not errs, errs
+        await ctx.close()
+    finally:
+        stop_bridge(br)
+
 async def main():
     async with async_playwright() as p:
         browsers = [("chromium", await p.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"]))]
@@ -150,6 +173,7 @@ async def main():
             print("firefox: not installed here, skipped (" + str(e).splitlines()[0][:80] + ")")
         await chrome_tv_driver(browsers[0][1])
         for name, b in browsers:
+            await install_offer(b, name)
             await rtl_and_board(b, name)
             await flash_blank(b, name)
             await b.close()

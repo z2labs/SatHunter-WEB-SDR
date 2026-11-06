@@ -165,6 +165,9 @@
         if (!this.claimed) throw new Error("mock: interface not claimed");
         if (endpoint !== 1) throw new Error("mock: no IN endpoint " + endpoint);
         state.bulkCalls++;
+        // like the chip: endpoint A stays stalled (EPA_CTL bit 12, set by the init) until the
+        // driver's resetBuffer clears it; a read in flight when it gets set stalls too
+        if (blockGet(1, 0x2148) & 0x1000) { state.stalls = (state.stalls || 0) + 1; return { status: "stall" }; }
         const fs = sampleRate() || 2.4e6;
         // in a browser, deliver at the real sample rate like a stick does (Node tests run unpaced)
         if (typeof window !== "undefined") await new Promise((r) => setTimeout(r, (length / 2 / fs) * 1000));
